@@ -1352,8 +1352,33 @@ function pointNumberOf(label){
 function numericPoints(circ){
   return circ.pontos.map((p,idx)=>({idx, num: pointNumberOf(p.label), p})).filter(x=>x.num!==null);
 }
+// Pontos "nomeados" do circuito (Se-NA, 11L, 29R, etc.) — tudo que não é
+// número de luminária. Servem como origem/destino alternativos na busca livre.
+function namedPoints(circ){
+  const seen = new Set();
+  return circ.pontos.filter(p=>{
+    if(pointNumberOf(p.label)!==null) return false;
+    const key = p.label.trim().toUpperCase();
+    if(seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
 function circuitSupportsFreeSearch(circ){
   return numericPoints(circ).length >= 2;
+}
+// Resolve um valor digitado (número de luminária OU rótulo nomeado, ex.
+// "Se-NA", "11L") pra uma posição na cadeia do circuito.
+function resolveFreeSearchToken(circ, token){
+  const s = String(token||'').trim();
+  if(s===''){ return null; }
+  if(/^\d+$/.test(s)){
+    return locateWithinSegment(circ, parseInt(s,10));
+  }
+  const norm = s.toUpperCase().replace(/\s+/g,'');
+  const match = circ.pontos.find(p=>p.label.trim().toUpperCase().replace(/\s+/g,'')===norm);
+  if(match) return {cum_len: match.cum_len, cum_trafos: match.cum_trafos, exact:true};
+  return null;
 }
 // Localiza o trecho oficial (par de pontos consecutivos) que contém o número
 // pedido, e devolve a posição proporcional dele dentro desse trecho.
@@ -1379,10 +1404,9 @@ function locateWithinSegment(circ, num){
   }
   return null; // fora da faixa conhecida — não estima
 }
-function computeFreeSearch(circ, numDe, numAte){
-  if(isNaN(numDe)||isNaN(numAte)) return null;
-  let a = locateWithinSegment(circ, numDe);
-  let b = locateWithinSegment(circ, numAte);
+function computeFreeSearch(circ, tokenDe, tokenAte){
+  let a = resolveFreeSearchToken(circ, tokenDe);
+  let b = resolveFreeSearchToken(circ, tokenAte);
   if(!a||!b) return null;
   if(a.cum_len>b.cum_len){ const t=a;a=b;b=t; }
   const comprimento = Math.round((b.cum_len-a.cum_len)*10)/10;
@@ -1497,18 +1521,21 @@ function renderDetail(){
 
     ${circuitSupportsFreeSearch(circ) ? `
     <div class="free-search">
-      <div class="fs-title">Busca por número de luminária</div>
-      <div class="fs-sub">Digite qualquer número, mesmo que não seja um dos pontos oficiais da planilha. O valor é estimado dividindo proporcionalmente o trecho oficial que contém esse número.</div>
+      <div class="fs-title">Busca por número de luminária ou ponto</div>
+      <div class="fs-sub">Digite um número de luminária (mesmo que não seja um dos pontos oficiais — o valor é estimado por interpolação) ou um ponto nomeado do circuito, como ${namedPoints(circ).map(p=>p.label).join(', ')}.</div>
       <div class="row2">
         <div class="field">
-          <label>De (nº luminária)</label>
-          <input type="number" inputmode="numeric" id="fsDe" placeholder="ex: 1103">
+          <label>De (nº ou ponto)</label>
+          <input type="text" inputmode="text" id="fsDe" list="fsPontosList" placeholder="ex: 1103 ou Se-NA" autocomplete="off">
         </div>
         <div class="field">
-          <label>Até (nº luminária)</label>
-          <input type="number" inputmode="numeric" id="fsAte" placeholder="ex: 1108">
+          <label>Até (nº ou ponto)</label>
+          <input type="text" inputmode="text" id="fsAte" list="fsPontosList" placeholder="ex: 1108 ou 11L" autocomplete="off">
         </div>
       </div>
+      <datalist id="fsPontosList">
+        ${namedPoints(circ).map(p=>`<option value="${p.label}">`).join('')}
+      </datalist>
       <div id="fsResult"></div>
     </div>` : ''}
 
@@ -1559,12 +1586,12 @@ function renderDetail(){
     const fsAte = document.getElementById('fsAte');
     const fsResult = document.getElementById('fsResult');
     function updateFs(){
-      const numDe = parseInt(fsDe.value,10);
-      const numAte = parseInt(fsAte.value,10);
-      if(isNaN(numDe)||isNaN(numAte)){ fsResult.innerHTML=''; return; }
-      const r = computeFreeSearch(circ, numDe, numAte);
+      const tokenDe = fsDe.value;
+      const tokenAte = fsAte.value;
+      if(!tokenDe.trim()||!tokenAte.trim()){ fsResult.innerHTML=''; return; }
+      const r = computeFreeSearch(circ, tokenDe, tokenAte);
       if(!r){
-        fsResult.innerHTML = `<div class="fs-hint">Não achei um trecho oficial que contenha esses números. Confira se estão dentro da faixa do circuito.</div>`;
+        fsResult.innerHTML = `<div class="fs-hint">Não achei um trecho oficial que contenha esse número, ou o ponto digitado não existe neste circuito. Confira a grafia (ex: Se-NA, 11L) ou se o número está dentro da faixa do circuito.</div>`;
         return;
       }
       fsResult.innerHTML = `
