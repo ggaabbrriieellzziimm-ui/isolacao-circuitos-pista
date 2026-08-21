@@ -7,8 +7,8 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="apple-mobile-web-app-title" content="Isolação">
-<title>Balizamento — Isolação</title>
+<meta name="apple-mobile-web-app-title" content="RGL Isolação">
+<title>RGL Balizamento — Isolação</title>
 <link rel="manifest" href="manifest.json">
 <link rel="icon" href="icon-192.png">
 <link rel="apple-touch-icon" href="icon-192.png">
@@ -228,6 +228,13 @@ button.secondary{width:100%;padding:13px;background:transparent;color:var(--text
 .panel-geral-btn{width:100%;margin-top:10px;padding:11px;background:var(--panel);border:1px solid var(--border);
   border-radius:10px;color:var(--text);font-family:var(--disp);font-size:13px;letter-spacing:.03em;
   text-transform:uppercase;cursor:pointer;}
+
+/* backup discreto */
+.backup-row{display:flex;gap:8px;margin-top:8px;}
+.backup-btn{flex:1;padding:8px;background:transparent;border:1px solid var(--border);
+  border-radius:9px;color:var(--muted);font-family:var(--disp);font-size:10.5px;letter-spacing:.03em;
+  text-transform:uppercase;cursor:pointer;}
+.backup-btn:active{background:var(--panel);}
 .painel-geral{display:none;}
 .painel-geral.show{display:block;}
 .pg-summary{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px;}
@@ -272,10 +279,15 @@ button.secondary{width:100%;padding:13px;background:transparent;color:var(--text
 <header class="app">
   <div class="app-title">
     <div class="eyebrow">Manutenção · Balizamento</div>
-    <div class="h1">Isolação de Balizamento<small>Resistência de isolação por trecho — circuitos série</small></div>
+    <div class="h1">RGL Isolação<small>Resistência de isolação por trecho — circuitos série</small></div>
   </div>
   <div class="tabs" id="tabs"></div>
   <button class="panel-geral-btn" id="painelGeralBtn">📊 Painel geral das pistas</button>
+  <div class="backup-row">
+    <button class="backup-btn" id="backupExportBtn">💾 Exportar backup</button>
+    <button class="backup-btn" id="backupRestoreBtn">📂 Restaurar backup</button>
+  </div>
+  <input type="file" id="backupFileInput" accept="application/json,.json" style="display:none;">
 </header>
 
 <main>
@@ -784,6 +796,94 @@ function repairLegacyRecords(){
   localStorage.setItem(REPAIR_FLAG, '1');
 }
 repairLegacyRecords();
+
+// ---------------------------------------------------------------
+// BACKUP GERAL (JSON) — exportar / restaurar todos os registros
+// ---------------------------------------------------------------
+async function exportBackupJSON(){
+  try{
+    const recs = loadRecords();
+    const backup = {
+      app: 'RGL Isolação',
+      tipo: 'backup_geral',
+      versao: 1,
+      exportado_em: new Date().toISOString(),
+      total_registros: recs.length,
+      registros: recs,
+    };
+    const jsonStr = JSON.stringify(backup, null, 2);
+    const blob = new Blob([jsonStr], {type:'application/json'});
+    const stamp = new Date().toISOString().slice(0,10);
+    const filename = `backup_rgl_isolacao_${stamp}.json`;
+
+    if(navigator.share && navigator.canShare){
+      try{
+        const file = new File([blob], filename, {type:'application/json'});
+        if(navigator.canShare({files:[file]})){
+          await navigator.share({files:[file], title:'Backup RGL Isolação', text:`Backup geral — ${recs.length} registros`});
+          showToast('Backup exportado.');
+          return;
+        }
+      }catch(e){
+        if(e && e.name === 'AbortError') return; // usuário cancelou o share
+        console.warn('Compartilhar backup falhou, baixando direto:', e);
+      }
+    }
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = filename;
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(url);
+    showToast('Backup baixado: ' + filename);
+  }catch(e){
+    console.error('Falha ao exportar backup:', e);
+    showErrorPanel('Erro ao exportar backup:', (e && e.stack) || String(e));
+  }
+}
+
+function restoreBackupJSON(file){
+  const reader = new FileReader();
+  reader.onload = () => {
+    try{
+      const data = JSON.parse(reader.result);
+      const incoming = Array.isArray(data) ? data : data.registros;
+      if(!Array.isArray(incoming)) throw new Error('Arquivo não contém uma lista de registros válida.');
+
+      const current = loadRecords();
+      const byId = {};
+      current.forEach(r=>{ byId[r.id] = r; });
+      let added = 0, updated = 0;
+      incoming.forEach(r=>{
+        if(!r || !r.id) return;
+        if(byId[r.id]) updated++; else added++;
+        byId[r.id] = r;
+      });
+      const merged = Object.values(byId);
+      saveRecords(merged);
+      showToast(`Backup restaurado: ${added} novo(s), ${updated} atualizado(s).`);
+      if(typeof render === 'function') render();
+    }catch(e){
+      console.error('Falha ao restaurar backup:', e);
+      showErrorPanel('Erro ao restaurar backup:', (e && e.stack) || String(e));
+    }
+  };
+  reader.onerror = () => {
+    showErrorPanel('Erro ao ler arquivo de backup:', String(reader.error));
+  };
+  reader.readAsText(file);
+}
+
+document.getElementById('backupExportBtn').addEventListener('click', exportBackupJSON);
+document.getElementById('backupRestoreBtn').addEventListener('click', ()=>{
+  document.getElementById('backupFileInput').click();
+});
+document.getElementById('backupFileInput').addEventListener('change', (e)=>{
+  const file = e.target.files && e.target.files[0];
+  if(!file) return;
+  const proceed = confirm('Restaurar este backup? Registros existentes com o mesmo ID serão atualizados; os demais serão mantidos.');
+  if(proceed) restoreBackupJSON(file);
+  e.target.value = '';
+});
 
 // ---------------------------------------------------------------
 // EDGE LIGHTS DECOR (signature motif, ambient)
