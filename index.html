@@ -7,8 +7,8 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="apple-mobile-web-app-title" content="RGL Isolação">
-<title>RGL Balizamento — Isolação</title>
+<meta name="apple-mobile-web-app-title" content="Isolação de Balizamento">
+<title>Isolação de Balizamento</title>
 <link rel="manifest" href="manifest.json">
 <link rel="icon" href="icon-192.png">
 <link rel="apple-touch-icon" href="icon-192.png">
@@ -279,7 +279,7 @@ button.secondary{width:100%;padding:13px;background:transparent;color:var(--text
 <header class="app">
   <div class="app-title">
     <div class="eyebrow">Manutenção · Balizamento</div>
-    <div class="h1">RGL Isolação<small>Resistência de isolação por trecho — circuitos série</small></div>
+    <div class="h1">Isolação de Balizamento<small>Resistência de isolação por trecho — circuitos série</small></div>
   </div>
   <div class="tabs" id="tabs"></div>
   <button class="panel-geral-btn" id="painelGeralBtn">📊 Painel geral das pistas</button>
@@ -804,7 +804,7 @@ async function exportBackupJSON(){
   try{
     const recs = loadRecords();
     const backup = {
-      app: 'RGL Isolação',
+      app: 'Isolação de Balizamento',
       tipo: 'backup_geral',
       versao: 1,
       exportado_em: new Date().toISOString(),
@@ -820,7 +820,7 @@ async function exportBackupJSON(){
       try{
         const file = new File([blob], filename, {type:'application/json'});
         if(navigator.canShare({files:[file]})){
-          await navigator.share({files:[file], title:'Backup RGL Isolação', text:`Backup geral — ${recs.length} registros`});
+          await navigator.share({files:[file], title:'Backup Isolação de Balizamento', text:`Backup geral — ${recs.length} registros`});
           showToast('Backup exportado.');
           return;
         }
@@ -1848,6 +1848,12 @@ function buildStyledXlsxForCircuit(circ){
     if(byIdx) return byIdx;
     return latestByKey[deLabel+'|'+ateLabel] || null;
   }
+  // Linha de resumo (circuito inteiro): prioriza a MEDIÇÃO REAL feita em
+  // campo pelo técnico (registro salvo De=0 Até=último ponto), e só cai
+  // pro valor de referência da planilha original se ainda não foi medido.
+  function findFullCircuitRecord(){
+    return latestByKey['0|'+(circ.pontos.length-1)] || null;
+  }
 
   const wb = new SimpleXlsx('Análise das medições');
   wb.setColWidths([11, 8, 12, 10, 13, 13, 13, 11, 8, 8, 8, 12, 11, 24, 9]);
@@ -1865,6 +1871,9 @@ function buildStyledXlsxForCircuit(circ){
   const CELL_STYLE_PLAIN = { border:true, borderColor:'808080', align:{h:'center', v:'center'} };
   const CELL_STYLE_NUM2 = { border:true, borderColor:'808080', align:{h:'center', v:'center'}, numFmt:'0.00' };
   const CELL_STYLE_NUM2_BOLD = { bold:true, border:true, borderColor:'808080', align:{h:'center', v:'center'}, numFmt:'0.00' };
+  const CELL_STYLE_FALHA_FILL = 'FFF8CBAD'; // vermelho/salmão claro — trecho com potencial de falha
+  const CELL_STYLE_PLAIN_FALHA = { border:true, borderColor:'808080', align:{h:'center', v:'center'}, fill:CELL_STYLE_FALHA_FILL };
+  const CELL_STYLE_PCT_FALHA = { border:true, borderColor:'808080', align:{h:'center', v:'center'}, fill:CELL_STYLE_FALHA_FILL, numFmt:'0.0%' };
 
   // ---- linha 1: cabeçalhos de grupo mesclados, igual ao original ----
   const groups = [
@@ -1899,17 +1908,23 @@ function buildStyledXlsxForCircuit(circ){
     const trafos_uA = (trafos||0)*2;
     const total_uA = cabo_uA+trafos_uA;
     const calculada = total_uA>0 ? circ.tensao/total_uA : 0;
-    const rec = medidaOverride!==undefined ? null : findRecordFor(inicio, fim);
-    const medida = medidaOverride!==undefined ? medidaOverride : (rec ? rec.medida : null);
+    // Linha de resumo (circuito inteiro): prioriza a medição real feita em
+    // campo (se o técnico já mediu Se-NA→Se-NA no app); só usa o valor de
+    // referência da planilha original enquanto isso ainda não foi medido.
+    const fullRec = isResumo ? findFullCircuitRecord() : null;
+    const rec = fullRec || (medidaOverride!==undefined ? null : findRecordFor(inicio, fim));
+    const medida = fullRec ? fullRec.medida : (medidaOverride!==undefined ? medidaOverride : (rec ? rec.medida : null));
     const temMedida = medida!=null && medida!=='';
     const situacao = temMedida ? (medida>=calculada ? 'NORMAL' : 'TRECHO COM POTENCIAL DE FALHA') : '';
     const pct = temMedida && calculada>0 ? (medida/calculada) : null;
+    const emFalha = situacao==='TRECHO COM POTENCIAL DE FALHA';
 
     const r = rowIdx;
-    const sLeft = isResumo ? CELL_STYLE_LEFT_BOLD : CELL_STYLE_LEFT;
-    const sCenter = isResumo ? CELL_STYLE_CENTER_BOLD : CELL_STYLE_CENTER;
-    const sPlain = isResumo ? CELL_STYLE_CENTER_BOLD : CELL_STYLE_PLAIN;
-    const sNum = isResumo ? CELL_STYLE_NUM2_BOLD : CELL_STYLE_NUM2;
+    // Sem negrito na linha de resumo — mesmo estilo visual das demais linhas.
+    const sLeft = CELL_STYLE_LEFT;
+    const sCenter = CELL_STYLE_CENTER;
+    const sPlain = emFalha ? CELL_STYLE_PLAIN_FALHA : CELL_STYLE_PLAIN;
+    const sNum = CELL_STYLE_NUM2;
 
     wb.setCell(r, 1, circ.pistaLabel||currentPista, sLeft);
     wb.setCell(r, 2, circ.tipo, sLeft);
@@ -1927,10 +1942,8 @@ function buildStyledXlsxForCircuit(circ){
     wb.setFormula(r, 12, `IF(K${r}=0,0,D${r}/K${r})`, Math.round(calculada*100)/100, sNum);
     wb.setCell(r, 13, temMedida?medida:'', sPlain);
     wb.setFormula(r, 14, `IF(M${r}="","",IF(M${r}<L${r},"TRECHO COM POTENCIAL DE FALHA","NORMAL"))`, situacao, sPlain);
-    // destaque só na célula de "%" quando normal — igual à planilha original
-    const pctStyle = situacao==='NORMAL'
-      ? (isResumo?CELL_STYLE_PCT_OK_BOLD:CELL_STYLE_PCT_OK)
-      : (isResumo?CELL_STYLE_PCT_PLAIN_BOLD:CELL_STYLE_PCT_PLAIN);
+    // destaque verde quando normal, vermelho/salmão quando em potencial de falha
+    const pctStyle = situacao==='NORMAL' ? CELL_STYLE_PCT_OK : (emFalha ? CELL_STYLE_PCT_FALHA : CELL_STYLE_PCT_PLAIN);
     wb.setFormula(r, 15, `IF(OR(M${r}="",L${r}=0),"",M${r}/L${r})`, pct!=null?Math.round(pct*1000)/1000:'', pctStyle);
     rowIdx++;
   }

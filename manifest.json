@@ -1,6 +1,6 @@
 {
-  "name": " Balizamento — Isolação",
-  "short_name": "Isolação de balizamento",
+  "name": "Isolação de Balizamento",
+  "short_name": "Isolação de Balizamento",
   "description": "Registro e controle de medições de isolação — balizamento de pista",
   "start_url": "./index.html",
   "scope": "./",
