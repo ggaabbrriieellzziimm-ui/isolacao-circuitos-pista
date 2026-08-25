@@ -232,11 +232,11 @@ button.secondary{width:100%;padding:13px;background:transparent;color:var(--text
 .mode-btn.active{background:var(--amber);color:#1a1206;border-color:var(--amber);font-weight:600;}
 .mode-btn.active[data-m="corr"]{background:#e5484d;color:#fff;border-color:#e5484d;}
 
-.os-panel{margin:0 16px 14px;padding:12px 14px;background:var(--panel);border:1.5px solid var(--amber);border-radius:12px;}
+.os-panel{margin:0 16px 14px;padding:12px 14px;background:var(--panel);border:1.5px solid #e5484d;border-radius:12px;}
 .os-panel.corr{border-color:#e5484d;}
 .os-panel label{display:block;font-family:var(--disp);font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:var(--amber);margin-bottom:6px;}
 .os-panel.corr label{color:#ff8a82;}
-.os-panel input{width:100%;padding:10px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:16px;}
+.os-panel input{width:100%;padding:10px;border-radius:8px;border:1px solid #e5484d;background:var(--bg);color:var(--text);font-size:16px;}
 .os-hint{font-size:11px;color:var(--muted);margin-top:6px;line-height:1.4;}
 
 .corr-item{margin:0 16px 12px;padding:12px 14px;background:var(--panel);border:1px solid var(--border);border-radius:12px;display:flex;gap:10px;flex-wrap:wrap;align-items:flex-start;}
@@ -277,7 +277,9 @@ button.secondary{width:100%;padding:13px;background:transparent;color:var(--text
 .pg-item.dim{opacity:.55;}
 .pg-ok-tag{font-family:var(--disp);font-size:11px;letter-spacing:.03em;text-transform:uppercase;color:var(--green);
   background:rgba(52,211,153,.12);border:1px solid rgba(52,211,153,.35);border-radius:8px;padding:5px 9px;}
-.pg-trend-btn{background:var(--panel2);border:1px solid var(--border);border-radius:8px;padding:6px 9px;font-size:14px;cursor:pointer;}
+.pg-trend-btn{background:var(--panel2);border:1px solid var(--border);border-radius:8px;
+  width:38px;height:38px;min-width:38px;flex-shrink:0;font-size:16px;cursor:pointer;
+  display:flex;align-items:center;justify-content:center;padding:0;}
 .pg-item .l{font-family:var(--disp);font-size:15px;}
 .pg-item .m{font-family:var(--mono);font-size:11px;color:var(--muted);margin-top:2px;}
 .pg-item .count{font-family:var(--disp);font-size:20px;font-weight:600;color:var(--red);}
