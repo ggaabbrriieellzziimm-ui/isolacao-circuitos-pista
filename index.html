@@ -274,6 +274,10 @@ button.secondary{width:100%;padding:13px;background:transparent;color:var(--text
 .pg-item:active{background:var(--panel2);}
 .pg-item.readonly{cursor:default;}
 .pg-item.readonly:active{background:var(--panel);}
+.pg-item.dim{opacity:.55;}
+.pg-ok-tag{font-family:var(--disp);font-size:11px;letter-spacing:.03em;text-transform:uppercase;color:var(--green);
+  background:rgba(52,211,153,.12);border:1px solid rgba(52,211,153,.35);border-radius:8px;padding:5px 9px;}
+.pg-trend-btn{background:var(--panel2);border:1px solid var(--border);border-radius:8px;padding:6px 9px;font-size:14px;cursor:pointer;}
 .pg-item .l{font-family:var(--disp);font-size:15px;}
 .pg-item .m{font-family:var(--mono);font-size:11px;color:var(--muted);margin-top:2px;}
 .pg-item .count{font-family:var(--disp);font-size:20px;font-weight:600;color:var(--red);}
@@ -1031,25 +1035,21 @@ function renderPainelGeral(){
   const pistas = Object.keys(CIRCUIT_DATA);
   let totalFalhas = 0, totalOk = 0, totalSemDado = 0;
   const porPista = {};
-  const circuitosComAlerta = [];
+  const todosCircuitos = []; // TODOS os circuitos, não só os com falha
 
   pistas.forEach(pista=>{
     let falhasNaPista = 0;
     CIRCUIT_DATA[pista].forEach(circ=>{
-      if(circ.sem_dados){ totalSemDado++; return; }
+      if(circ.sem_dados){ totalSemDado++; todosCircuitos.push({pista, circ, n:0, semDados:true}); return; }
       const n = countFalhas(circ);
-      if(n>0){
-        totalFalhas += n;
-        falhasNaPista += n;
-        circuitosComAlerta.push({pista, circ, n});
-      } else {
-        totalOk++;
-      }
+      if(n>0){ totalFalhas += n; falhasNaPista += n; } else { totalOk++; }
+      todosCircuitos.push({pista, circ, n, semDados:false});
     });
     porPista[pista] = falhasNaPista;
   });
 
-  circuitosComAlerta.sort((a,b)=>b.n-a.n);
+  // Falhas primeiro (mais crítico no topo), depois os normais, em ordem alfabética.
+  todosCircuitos.sort((a,b)=> b.n - a.n || circLabel(a.circ).localeCompare(circLabel(b.circ)));
 
   const cardsPista = pistas.map(p=>{
     const n = porPista[p];
@@ -1060,21 +1060,26 @@ function renderPainelGeral(){
     </div>`;
   }).join('');
 
-  const listaHtml = circuitosComAlerta.length ? circuitosComAlerta.map(x=>{
-    // OS(s) corretiva(s) já abertas pra esse circuito, se houver
-    const osCorr = [...new Set(latestFalhaRecords(x.circ).map(r=>{
+  const listaFonte = pgMode==='corr' ? todosCircuitos.filter(x=>x.n>0) : todosCircuitos;
+
+  const listaHtml = listaFonte.length ? listaFonte.map(x=>{
+    const osAtual = loadOsMap()[x.circ.id] || null;
+    const osCorr = x.n>0 ? [...new Set(latestFalhaRecords(x.circ).map(r=>{
       const corr = loadRecords().filter(c=>c.circId===x.circ.id && c.manut==='corr' && c.deIdx===r.deIdx && c.ateIdx===r.ateIdx).sort((a,b)=>b.ts-a.ts)[0];
       return corr ? corr.os : null;
-    }).filter(Boolean))];
+    }).filter(Boolean))] : [];
+    const osTxt = x.n>0
+      ? (osCorr.length ? `OS corretiva: ${osCorr.join(', ')}` : 'sem OS corretiva aberta')
+      : (osAtual ? `Última OS: ${osAtual}` : 'sem OS registrada');
     return `
-    <div class="pg-item readonly">
+    <div class="pg-item readonly ${x.semDados?'dim':''}">
       <div>
         <div class="l">${circLabel(x.circ)}</div>
-        <div class="m">${x.pista}${osCorr.length ? ` · OS corretiva: ${osCorr.join(', ')}` : ' · sem OS corretiva aberta'}</div>
+        <div class="m">${x.pista}${x.semDados ? ' · sem dados' : ` · ${osTxt}`}</div>
       </div>
-      <div style="text-align:right;">
-        <div class="count">${x.n}</div>
-        <div class="m" style="margin-top:0;">trecho${x.n===1?'':'s'}</div>
+      <div style="display:flex;align-items:center;gap:10px;">
+        ${x.n>0 ? `<div style="text-align:right;"><div class="count">${x.n}</div><div class="m" style="margin-top:0;">trecho${x.n===1?'':'s'}</div></div>` : `<div class="pg-ok-tag">${x.semDados?'—':'OK'}</div>`}
+        ${!x.semDados ? `<button class="pg-trend-btn" data-pista="${x.pista}" data-circid="${x.circ.id}" title="Ver histórico">📈</button>` : ''}
       </div>
     </div>`;
   }).join('')
@@ -1088,14 +1093,14 @@ function renderPainelGeral(){
     <div class="dheader">
       <div class="dtag">Visão geral · somente leitura</div>
       <div class="dname">SAÚDE DAS PISTAS</div>
-      <div class="dmeta">${totalOk} circuitos normais · ${circuitosComAlerta.length} com alerta · ${totalSemDado} sem dado</div>
+      <div class="dmeta">${totalOk} circuitos normais · ${todosCircuitos.filter(x=>x.n>0).length} com alerta · ${totalSemDado} sem dado</div>
     </div>
     <div class="mode-toggle" style="margin:0 16px 14px;">
-      <div class="mode-btn ${pgMode==='prev'?'active':''}" id="pgModePrev">Preventiva</div>
-      <div class="mode-btn ${pgMode==='corr'?'active':''}" id="pgModeCorr" data-m="corr">Corretiva</div>
+      <div class="mode-btn ${pgMode==='prev'?'active':''}" id="pgModePrev">Todos os circuitos</div>
+      <div class="mode-btn ${pgMode==='corr'?'active':''}" id="pgModeCorr" data-m="corr">Só corretiva</div>
     </div>
     <div class="pg-summary">${cardsPista}</div>
-    <div class="pg-section-title">${pgMode==='corr' ? 'Pendências corretivas, por circuito' : 'Trechos em falha agora, por circuito'}</div>
+    <div class="pg-section-title">${pgMode==='corr' ? 'Pendências corretivas, por circuito' : 'Todos os circuitos, das duas pistas'}</div>
     ${listaHtml}
   `;
 
@@ -1105,8 +1110,17 @@ function renderPainelGeral(){
   };
   document.getElementById('pgModePrev').onclick = ()=>{ pgMode='prev'; renderPainelGeral(); };
   document.getElementById('pgModeCorr').onclick = ()=>{ pgMode='corr'; renderPainelGeral(); };
-  // Somente leitura — nenhum item é clicável, à prova de alteração acidental
-  // durante uma apresentação/auditoria.
+  // Ícone de gráfico abre o histórico do circuito inteiro (Se-NA ao fim da
+  // cadeia) — só leitura, sem editar nada aqui no Painel Geral.
+  el.querySelectorAll('.pg-trend-btn').forEach(btn=>{
+    btn.onclick = ()=>{
+      const pista = btn.dataset.pista;
+      const circ = CIRCUIT_DATA[pista].find(c=>c.id===btn.dataset.circid);
+      const hist = getTrendHistory(circ, 0, circ.pontos.length-1);
+      if(hist.length===0){ showToast('Ainda não há medições do circuito inteiro (Se-NA ao fim) pra mostrar aqui.'); return; }
+      openTrendPanel(circ, 0, circ.pontos.length-1);
+    };
+  });
 }
 
 document.getElementById('painelGeralBtn').onclick = ()=>{
