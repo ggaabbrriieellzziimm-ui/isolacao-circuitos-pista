@@ -225,10 +225,6 @@ button.secondary{width:100%;padding:13px;background:transparent;color:var(--text
 .fs-hint{font-size:11px;color:var(--muted);margin-top:8px;line-height:1.5;}
 
 /* painel geral */
-.os-panel{margin:0 16px 14px;padding:12px 14px;background:var(--panel);border:1.5px solid var(--amber);border-radius:12px;}
-.os-panel label{display:block;font-family:var(--disp);font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:var(--amber);margin-bottom:6px;}
-.os-panel input{width:100%;padding:10px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:16px;}
-.os-hint{font-size:11px;color:var(--muted);margin-top:6px;line-height:1.4;}
 .panel-geral-btn{width:100%;margin-top:10px;padding:11px;background:var(--panel);border:1px solid var(--border);
   border-radius:10px;color:var(--text);font-family:var(--disp);font-size:13px;letter-spacing:.03em;
   text-transform:uppercase;cursor:pointer;}
@@ -729,15 +725,6 @@ class SimpleXlsx {
 let currentPista = Object.keys(CIRCUIT_DATA)[0];
 let currentCircuit = null; // circuit object when in detail view
 const STORAGE_KEY = 'rgl_isolacao_registros_v1';
-const OS_MAP_KEY = 'rgl_isolacao_os_map_v1'; // {circId: última OS usada} — só um "lembrete" na tela, não pré-preenche.
-function loadOsMap(){
-  try{ return JSON.parse(localStorage.getItem(OS_MAP_KEY)) || {}; }catch(e){ return {}; }
-}
-function saveLastOsForCircuit(circId, os){
-  const m = loadOsMap();
-  m[circId] = os;
-  localStorage.setItem(OS_MAP_KEY, JSON.stringify(m));
-}
 
 function loadRecords(){
   try{ return JSON.parse(localStorage.getItem(STORAGE_KEY)) || []; }catch(e){ return []; }
@@ -961,9 +948,7 @@ function groupKeyFor(circ, r){
 // Nome de exibição do circuito, sem duplicar o tipo quando o nome já
 // vem com ele embutido (ex: nome="CIRC 09 29L", tipo="CIRC" -> não repete).
 function circLabel(circ){
-  const nomeUpper = circ.nome.toUpperCase();
-  if(nomeUpper.startsWith(circ.tipo.toUpperCase()) || nomeUpper.startsWith('CIRCUITO')) return circ.nome;
-  return `${circ.tipo} ${circ.nome}`;
+  return circ.nome.toUpperCase().startsWith(circ.tipo.toUpperCase()) ? circ.nome : `${circ.tipo} ${circ.nome}`;
 }
 
 function circuitStatus(circ){
@@ -1130,7 +1115,6 @@ let selDeIdx = null, selAteIdx = null, selTipo = 'prev';
 let pendingFoto = null; // {dataUrl, width, height} da foto comprimida, se anexada
 let pendingGeo = null;  // {lat, lng, accuracy} da localização, se disponível
 let geoAttempted = false;
-let currentOS = ''; // nº da OS em vigor no circuito aberto — obrigatório pra salvar
 
 function openDetail(circ){
   currentCircuit = circ;
@@ -1140,7 +1124,6 @@ function openDetail(circ){
   pendingFoto = null;
   pendingGeo = null;
   geoAttempted = false;
-  currentOS = '';
   showDetail();
   renderDetail();
   tryCaptureGeo();
@@ -1439,7 +1422,6 @@ function renderDetail(){
   const circ = currentCircuit;
   const detail = document.getElementById('detail');
   const calc = computeRange(circ, selDeIdx, selAteIdx);
-  const lastOsHint = loadOsMap()[circ.id] || '';
 
   // strip visual
   const totalLen = circ.pontos[circ.pontos.length-1].cum_len || 1;
@@ -1478,12 +1460,6 @@ function renderDetail(){
       <div class="dname">${circ.nome}</div>
       <div class="dmeta">${circ.tensao} V · comprimento total ${circ.resumo.comprimento_total||'—'} m · ${circ.resumo.trafos_total||'—'} trafos</div>
       ${circ.mapeamento_provisorio ? `<div class="dmeta" style="color:var(--amber);margin-top:6px;">⚠ Nome ajustado a partir de "${circ.nome_original}" (${circ.mapeado_de}) — confirme se os dados batem com este circuito.</div>` : ''}
-    </div>
-
-    <div class="os-panel">
-      <label>Nº da ordem de serviço (obrigatório para salvar)</label>
-      <input type="text" inputmode="numeric" pattern="[0-9]*" id="osInput" placeholder="ex: 1042" value="${currentOS}">
-      <div class="os-hint">${lastOsHint ? `Última OS usada neste circuito: ${lastOsHint}. Digite o mesmo número pra continuar nessa leva, ou um número diferente pra começar uma nova.` : 'Toda medição salva fica vinculada a este número.'}</div>
     </div>
 
     <div class="strip-wrap">
@@ -1587,14 +1563,6 @@ function renderDetail(){
   medidaInput.oninput = (e)=>{ detail.dataset.medida = e.target.value; updateStatusPill(); };
   document.getElementById('saveBtn').onclick = saveMeasurement;
 
-  const osInput = document.getElementById('osInput');
-  currentOS = osInput.value.replace(/\D/g,'');
-  osInput.oninput = (e)=>{
-    e.target.value = e.target.value.replace(/\D/g,''); // só dígitos
-    currentOS = e.target.value;
-    renderHistory(); // a lista de registros da tela reflete só a OS ativa
-  };
-
   // foto: botão abre o seletor de arquivo/câmera; ao escolher, comprime e mostra prévia
   document.getElementById('fotoBtn').onclick = ()=> document.getElementById('fotoInput').click();
   document.getElementById('fotoInput').onchange = async (e)=>{
@@ -1659,11 +1627,6 @@ function updateStatusPill(){
 }
 
 function saveMeasurement(){
-  if(!currentOS || !/^\d+$/.test(currentOS)){
-    showToast('Digite o número da OS antes de salvar — é obrigatório para este circuito.');
-    document.getElementById('osInput').focus();
-    return;
-  }
   const medidaInput = document.getElementById('medidaInput');
   const medida = parseFloat(medidaInput.value);
   if(isNaN(medida)){ showToast('Digite o valor medido antes de salvar.'); return; }
@@ -1685,14 +1648,12 @@ function saveMeasurement(){
     total_uA: calc.total_uA, calculada: calc.calculada,
     medida: medida, situacao: situacao,
     manut: selTipo, // 'prev' | 'corr'
-    os: currentOS,
     ts: Date.now(),
     foto: pendingFoto ? {dataUrl: pendingFoto.dataUrl, width: pendingFoto.width, height: pendingFoto.height} : null,
     lat: pendingGeo ? pendingGeo.lat : null,
     lng: pendingGeo ? pendingGeo.lng : null,
   });
   saveRecords(recs);
-  saveLastOsForCircuit(currentCircuit.id, currentOS);
   showToast(situacao==='NORMAL' ? 'Salvo — trecho NORMAL.' : 'Salvo — TRECHO COM POTENCIAL DE FALHA.');
   pendingFoto = null;
   renderFotoPreview();
@@ -1780,7 +1741,7 @@ function openTrendPanel(circ, deIdx, ateIdx){
     const d = new Date(r.ts);
     const dateStr = d.toLocaleDateString('pt-BR') + ' ' + d.toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'});
     return `<div class="trend-row">
-      <span>${dateStr}${r.os?` · OS ${r.os}`:''}</span>
+      <span>${dateStr}</span>
       <span>${r.medida} MΩ</span>
       <span class="badge ${r.situacao==='NORMAL'?'ok':'alert'}">${r.situacao==='NORMAL'?'Normal':'Falha'}</span>
     </div>`;
@@ -1821,7 +1782,7 @@ document.getElementById('trendOverlay').addEventListener('click', (e)=>{
 function renderHistory(){
   const histList = document.getElementById('histList');
   const histCount = document.getElementById('histCount');
-  const recs = loadRecords().filter(r=>r.circId===currentCircuit.id && r.os===currentOS);
+  const recs = loadRecords().filter(r=>r.circId===currentCircuit.id);
   // group by de|ate, keep only latest (última modificação)
   const latestByRange = {};
   recs.forEach(r=>{
@@ -1897,7 +1858,7 @@ function csvEscape(v){
 // ---------------------------------------------------------------
 function buildStyledXlsxForCircuit(circ){
   // último registro salvo (ou importado) por trecho, indexado por De|Até
-  const recs = loadRecords().filter(r=>r.circId===circ.id && r.os===currentOS);
+  const recs = loadRecords().filter(r=>r.circId===circ.id);
   const latestByKey = {};
   recs.forEach(r=>{
     const key = groupKeyFor(circ, r);
@@ -2225,7 +2186,7 @@ class SimpleDocx {
 // medições, fotos anexadas (com legenda e coordenadas quando houver) e
 // espaço pra conclusão/assinatura — mesma estrutura do modelo fornecido.
 async function buildDocxForCircuit(circ){
-  const recs = loadRecords().filter(r=>r.circId===circ.id && r.os===currentOS);
+  const recs = loadRecords().filter(r=>r.circId===circ.id);
   const latestByKey = {};
   recs.forEach(r=>{
     const key = groupKeyFor(circ, r);
@@ -2242,7 +2203,6 @@ async function buildDocxForCircuit(circ){
   doc.heading('1. Dados do Circuito', 2);
   doc.paragraph(`Circuito: ${circLabel(circ)}`);
   doc.paragraph(`Local/Pista: ${currentPista}`);
-  doc.paragraph(`Ordem de Serviço nº: ${currentOS}`);
   doc.paragraph(`Data da emissão: ${hoje}`);
   doc.paragraph(`Tensão do circuito: ${circ.tensao} V`);
 
@@ -2309,7 +2269,7 @@ async function buildDocxForCircuit(circ){
 
 
 function buildCsvForCircuit(circ){
-  const recs = loadRecords().filter(r=>r.circId===circ.id && r.os===currentOS);
+  const recs = loadRecords().filter(r=>r.circId===circ.id);
   const latestByRange = {};
   recs.forEach(r=>{
     const key = groupKeyFor(circ, r);
@@ -2331,7 +2291,7 @@ function buildCsvForCircuit(circ){
 }
 
 function buildTextSummary(circ){
-  const recs = loadRecords().filter(r=>r.circId===circ.id && r.os===currentOS);
+  const recs = loadRecords().filter(r=>r.circId===circ.id);
   const latestByRange = {};
   recs.forEach(r=>{
     const key = groupKeyFor(circ, r);
@@ -2351,7 +2311,7 @@ function buildTextSummary(circ){
 
 async function exportCircuit(){
   const circ = currentCircuit;
-  const recs = loadRecords().filter(r=>r.circId===circ.id && r.os===currentOS);
+  const recs = loadRecords().filter(r=>r.circId===circ.id);
   if(recs.length===0){ showToast('Nenhum registro para exportar ainda.'); return; }
   const text = buildTextSummary(circ);
   const xlsxFilename = circLabel(circ).replace(/\s+/g,'_') + '.xlsx';
@@ -2420,7 +2380,7 @@ async function exportCircuit(){
 
 async function exportDocxCircuit(){
   const circ = currentCircuit;
-  const recs = loadRecords().filter(r=>r.circId===circ.id && r.os===currentOS);
+  const recs = loadRecords().filter(r=>r.circId===circ.id);
   if(recs.length===0){ showToast('Nenhum registro para gerar relatório ainda.'); return; }
 
   let docxBlob = null;
