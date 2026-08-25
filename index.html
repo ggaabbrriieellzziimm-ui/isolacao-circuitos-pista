@@ -93,6 +93,9 @@ main{padding:6px 18px 40px;max-width:640px;margin:0 auto;}
   border:1px solid var(--border);border-radius:5px;padding:2px 6px;margin-left:8px;white-space:nowrap;}
 .chev{color:var(--muted);font-size:20px;margin-left:8px;}
 .crow{display:flex;align-items:center;}
+.side-divider{margin:18px 18px 8px;font-family:var(--disp);font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--amber);
+  display:flex;align-items:center;gap:8px;}
+.side-divider::after{content:'';flex:1;height:1px;background:var(--border);}
 
 .empty{text-align:center;color:var(--muted);padding:40px 20px;font-size:14px;}
 
@@ -100,7 +103,11 @@ main{padding:6px 18px 40px;max-width:640px;margin:0 auto;}
 .detail{display:none;}
 .detail.show{display:block;}
 .clist-wrap.hide{display:none;}
-.backbar{display:flex;align-items:center;gap:10px;padding:2px 0 10px;cursor:pointer;color:var(--muted);}
+.backbar{display:flex;align-items:center;gap:8px;margin:6px 16px 12px;padding:9px 14px;cursor:pointer;
+  color:var(--text);background:var(--panel);border:1px solid var(--border);border-radius:10px;width:fit-content;
+  font-family:var(--disp);font-size:13px;letter-spacing:.02em;}
+.backbar:active{background:var(--panel2);}
+.backbar svg{width:18px;height:18px;stroke:var(--amber);}
 .backbar svg{width:18px;height:18px;}
 .backbar span{font-family:var(--mono);font-size:12px;letter-spacing:.08em;text-transform:uppercase;}
 
@@ -1136,15 +1143,44 @@ document.getElementById('painelGeralBtn').onclick = ()=>{
   renderPainelGeral();
 };
 
-// Botão/gesto "voltar" do celular: se o Painel Geral estiver aberto, fecha
-// ele em vez de sair do app ou deixá-lo grudado atrás de outra tela.
+// Botão/gesto "voltar" do celular: se qualquer tela interna estiver aberta
+// (Painel Geral, Preventiva ou Corretiva), fecha ela e volta pra lista de
+// circuitos, em vez de sair do app.
 window.addEventListener('popstate', ()=>{
-  const painelAberto = document.getElementById('painelGeral').classList.contains('show');
-  if(painelAberto){
-    document.getElementById('painelGeral').classList.remove('show');
-    document.getElementById('clistWrap').classList.remove('hide');
+  const algumaTelaAberta =
+    document.getElementById('painelGeral').classList.contains('show') ||
+    document.getElementById('detail').classList.contains('show');
+  if(algumaTelaAberta){
+    showList();
+    renderList();
   }
 });
+
+// Detecta a que lado da pista (ex: "11L" ou "29R") um item pertence, pelo
+// sufixo do nome. Itens sem sufixo (ex: "CIRCUITO 01") herdam o lado do
+// item anterior — normalmente são a base da primeira cabeceira da pista.
+function sideLabelFor(nome, sideA, sideB){
+  const upper = nome.toUpperCase();
+  if(new RegExp('\\b'+sideB+'$').test(upper)) return sideB;
+  if(new RegExp('\\b'+sideA+'$').test(upper)) return sideA;
+  return null;
+}
+function appendWithSideDividers(clist, circuits, buildCardFn){
+  const [sideA, sideB] = currentPista.split('/');
+  let lastSide = null;
+  circuits.forEach(c=>{
+    const detected = sideLabelFor(c.nome, sideA, sideB);
+    const effectiveSide = detected || lastSide || sideA;
+    if(effectiveSide !== lastSide){
+      const divider = document.createElement('div');
+      divider.className = 'side-divider';
+      divider.textContent = `Início ${effectiveSide}`;
+      clist.appendChild(divider);
+      lastSide = effectiveSide;
+    }
+    clist.appendChild(buildCardFn(c));
+  });
+}
 
 function renderList(){
   const clist = document.getElementById('clist');
@@ -1158,14 +1194,13 @@ function renderList(){
     // Mesma ordem/disposição dos circuitos da preventiva — só o conteúdo
     // interno de cada um (ao clicar) é que muda pra mostrar os trechos
     // pendentes, ordenados por criticidade.
-    circuits.forEach(c=>{
+    appendWithSideDividers(clist, circuits, c=>{
       const noData = !!c.sem_dados;
       const n = noData ? 0 : countFalhas(c);
       const card = document.createElement('div');
       card.className='ccard' + (noData || n===0 ? ' nodata' : '');
       card.innerHTML = `
         <div class="left">
-          <div class="ctag">${c.tipo}</div>
           <div class="cname">${c.nome}</div>
           <div class="cmeta">${noData ? 'Aguardando planilha' : (n>0 ? `${n} trecho${n===1?'':'s'} pendente${n===1?'':'s'} de corretiva` : 'Sem pendências')}</div>
         </div>
@@ -1173,19 +1208,18 @@ function renderList(){
           ${n>0 ? `<div class="cstatus alert"></div><div class="chev">›</div>` : `<div class="nodata-tag">${noData?'sem dados':'ok'}</div>`}
         </div>`;
       if(!noData && n>0){ card.onclick = ()=>openCorretivaDetail(c); }
-      clist.appendChild(card);
+      return card;
     });
     return;
   }
 
-  circuits.forEach(c=>{
+  appendWithSideDividers(clist, circuits, c=>{
     const card = document.createElement('div');
     const noData = !!c.sem_dados;
     card.className='ccard' + (noData ? ' nodata' : '');
     const st = circuitStatus(c);
     card.innerHTML = noData ? `
       <div class="left">
-        <div class="ctag">${c.tipo}</div>
         <div class="cname">${c.nome}</div>
         <div class="cmeta">Aguardando planilha</div>
       </div>
@@ -1193,7 +1227,6 @@ function renderList(){
         <div class="nodata-tag">sem dados</div>
       </div>` : `
       <div class="left">
-        <div class="ctag">${c.tipo}</div>
         <div class="cname">${c.nome}</div>
         <div class="cmeta">${c.tensao} V · ${c.pontos.length-1} trechos base · ${c.resumo.trafos_total||'—'} trafos</div>
       </div>
@@ -1203,7 +1236,7 @@ function renderList(){
       </div>`;
     if(!noData){ card.onclick = ()=>openDetail(c); }
     else{ card.onclick = ()=>showToast('Ainda não recebi a planilha desse circuito.'); }
-    clist.appendChild(card);
+    return card;
   });
 }
 
@@ -1251,6 +1284,7 @@ function openDetail(circ){
   geoAttempted = false;
   currentOS = '';
   showDetail();
+  history.pushState({view:'detail'}, '');
   renderDetail();
   tryCaptureGeo();
 }
@@ -1268,6 +1302,7 @@ function openCorretivaDetail(circ){
   pendingGeo = null;
   geoAttempted = false;
   showDetail();
+  history.pushState({view:'corretiva'}, '');
   renderCorretivaDetail();
   tryCaptureGeo();
 }
@@ -1321,7 +1356,7 @@ function renderCorretivaDetail(){
     ${pendentes.length ? rowsHtml : `<div class="pg-empty">✓ Nenhum trecho pendente neste circuito.</div>`}
   `;
 
-  document.getElementById('backBtn').onclick = ()=>{ showList(); renderList(); };
+  document.getElementById('backBtn').onclick = ()=>{ history.back(); };
   const corrOsInput = document.getElementById('corrOsInput');
   corrOsInput.oninput = (e)=>{ e.target.value = e.target.value.replace(/\D/g,''); currentCorrOS = e.target.value; };
 
@@ -1728,13 +1763,6 @@ function renderDetail(){
         <input type="number" step="any" inputmode="decimal" id="medidaInput" placeholder="ex: 145" value="${medidaVal}">
       </div>
       <div class="field">
-        <label>Tipo de manutenção</label>
-        <div class="seg-toggle">
-          <div class="seg-btn ${selTipo==='prev'?'active':''}" data-t="prev" id="btnPrev">Preventiva</div>
-          <div class="seg-btn ${selTipo==='corr'?'active':''}" data-t="corr" id="btnCorr">Corretiva</div>
-        </div>
-      </div>
-      <div class="field">
         <label>Foto do megger (opcional)</label>
         <input type="file" accept="image/*" capture="environment" id="fotoInput" style="display:none;">
         <div id="fotoPreviewWrap"></div>
@@ -1759,6 +1787,18 @@ function renderDetail(){
 
     <button class="primary" id="saveBtn">Salvar medição</button>
 
+    <div class="hist-section">
+      <div class="hist-title"><span>Registros salvos</span> <span id="histCount"></span></div>
+      <div id="histList"></div>
+    </div>
+
+    <div class="export-bar">
+      <button class="secondary" id="exportBtn">Exportar planilha (.xlsx / WhatsApp)</button>
+      <div class="hint">Exporta todos os registros salvos deste circuito no mesmo layout de colunas da planilha original. Quando há preventiva e corretiva no mesmo trecho, vale sempre a última modificação.</div>
+      <button class="secondary" id="exportDocxBtn" style="margin-top:10px;">📄 Exportar relatório (.docx)</button>
+      <div class="hint">Gera um relatório técnico em Word — dados do circuito, tabela de medições, fotos anexadas com localização e espaço pra conclusão/assinatura. Você pode editar depois de baixar.</div>
+    </div>
+
     ${circuitSupportsFreeSearch(circ) ? `
     <div class="free-search">
       <div class="fs-title">Busca por número de luminária ou ponto</div>
@@ -1778,27 +1818,13 @@ function renderDetail(){
       </datalist>
       <div id="fsResult"></div>
     </div>` : ''}
-
-    <div class="hist-section">
-      <div class="hist-title"><span>Registros salvos</span> <span id="histCount"></span></div>
-      <div id="histList"></div>
-    </div>
-
-    <div class="export-bar">
-      <button class="secondary" id="exportBtn">Exportar planilha (.xlsx / WhatsApp)</button>
-      <div class="hint">Exporta todos os registros salvos deste circuito no mesmo layout de colunas da planilha original. Quando há preventiva e corretiva no mesmo trecho, vale sempre a última modificação.</div>
-      <button class="secondary" id="exportDocxBtn" style="margin-top:10px;">📄 Exportar relatório (.docx)</button>
-      <div class="hint">Gera um relatório técnico em Word — dados do circuito, tabela de medições, fotos anexadas com localização e espaço pra conclusão/assinatura. Você pode editar depois de baixar.</div>
-    </div>
   `;
 
-  document.getElementById('backBtn').onclick = ()=>{ showList(); renderList(); };
+  document.getElementById('backBtn').onclick = ()=>{ history.back(); };
   document.getElementById('selDe').value = String(selDeIdx);
   document.getElementById('selAte').value = String(selAteIdx);
   document.getElementById('selDe').onchange = (e)=>{ selDeIdx=parseInt(e.target.value,10); renderDetail(); };
   document.getElementById('selAte').onchange = (e)=>{ selAteIdx=parseInt(e.target.value,10); renderDetail(); };
-  document.getElementById('btnPrev').onclick = ()=>{ selTipo='prev'; renderDetail(); };
-  document.getElementById('btnCorr').onclick = ()=>{ selTipo='corr'; renderDetail(); };
   const medidaInput = document.getElementById('medidaInput');
   medidaInput.oninput = (e)=>{ detail.dataset.medida = e.target.value; updateStatusPill(); };
   document.getElementById('saveBtn').onclick = saveMeasurement;
