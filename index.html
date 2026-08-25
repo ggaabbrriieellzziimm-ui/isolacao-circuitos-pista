@@ -225,7 +225,7 @@ button.secondary{width:100%;padding:13px;background:transparent;color:var(--text
 .fs-hint{font-size:11px;color:var(--muted);margin-top:8px;line-height:1.5;}
 
 /* alternador preventiva/corretiva */
-.mode-toggle{display:flex;gap:8px;margin-top:10px;}
+.mode-toggle{display:flex;gap:8px;margin:10px 18px 0;}
 .mode-btn{flex:1;padding:10px;text-align:center;background:var(--panel);border:1px solid var(--border);
   border-radius:10px;font-family:var(--disp);font-size:12px;letter-spacing:.03em;text-transform:uppercase;
   color:var(--muted);cursor:pointer;}
@@ -955,7 +955,13 @@ function renderTabs(){
     const d = document.createElement('div');
     d.className = 'tab' + (pista===currentPista ? ' active':'');
     d.textContent = pista;
-    d.onclick = ()=>{ currentPista = pista; showList(); render(); };
+    d.onclick = ()=>{
+      currentPista = pista;
+      renderTabs();
+      const painelAberto = document.getElementById('painelGeral').classList.contains('show');
+      if(painelAberto){ renderPainelGeral(); }
+      else { showList(); render(); }
+    };
     tabsEl.appendChild(d);
   });
 }
@@ -1032,10 +1038,10 @@ function countFalhas(circ){
 let pgMode = 'prev'; // aba ativa dentro do Painel Geral (visão geral | pendências corretivas)
 function renderPainelGeral(){
   const el = document.getElementById('painelGeral');
-  const pistas = Object.keys(CIRCUIT_DATA);
+  const pistas = [currentPista]; // só a pista selecionada nas abas do topo
   let totalFalhas = 0, totalOk = 0, totalSemDado = 0;
   const porPista = {};
-  const todosCircuitos = []; // TODOS os circuitos, não só os com falha
+  const todosCircuitos = []; // TODOS os circuitos da pista atual, não só os com falha
 
   pistas.forEach(pista=>{
     let falhasNaPista = 0;
@@ -1091,23 +1097,20 @@ function renderPainelGeral(){
       <span>Voltar</span>
     </div>
     <div class="dheader">
-      <div class="dtag">Visão geral · somente leitura</div>
+      <div class="dtag">Visão geral · somente leitura · ${currentPista}</div>
       <div class="dname">SAÚDE DAS PISTAS</div>
       <div class="dmeta">${totalOk} circuitos normais · ${todosCircuitos.filter(x=>x.n>0).length} com alerta · ${totalSemDado} sem dado</div>
     </div>
-    <div class="mode-toggle" style="margin:0 16px 14px;">
+    <div class="mode-toggle" style="margin:0 18px 14px;">
       <div class="mode-btn ${pgMode==='prev'?'active':''}" id="pgModePrev">Todos os circuitos</div>
       <div class="mode-btn ${pgMode==='corr'?'active':''}" id="pgModeCorr" data-m="corr">Só corretiva</div>
     </div>
     <div class="pg-summary">${cardsPista}</div>
-    <div class="pg-section-title">${pgMode==='corr' ? 'Pendências corretivas, por circuito' : 'Todos os circuitos, das duas pistas'}</div>
+    <div class="pg-section-title">${pgMode==='corr' ? `Pendências corretivas — ${currentPista}` : `Todos os circuitos — ${currentPista}`}</div>
     ${listaHtml}
   `;
 
-  document.getElementById('pgBackBtn').onclick = ()=>{
-    document.getElementById('painelGeral').classList.remove('show');
-    document.getElementById('clistWrap').classList.remove('hide');
-  };
+  document.getElementById('pgBackBtn').onclick = ()=>{ history.back(); };
   document.getElementById('pgModePrev').onclick = ()=>{ pgMode='prev'; renderPainelGeral(); };
   document.getElementById('pgModeCorr').onclick = ()=>{ pgMode='corr'; renderPainelGeral(); };
   // Ícone de gráfico abre o histórico do circuito inteiro (Se-NA ao fim da
@@ -1127,8 +1130,19 @@ document.getElementById('painelGeralBtn').onclick = ()=>{
   document.getElementById('clistWrap').classList.add('hide');
   document.getElementById('detail').classList.remove('show');
   document.getElementById('painelGeral').classList.add('show');
+  history.pushState({view:'painel'}, '');
   renderPainelGeral();
 };
+
+// Botão/gesto "voltar" do celular: se o Painel Geral estiver aberto, fecha
+// ele em vez de sair do app ou deixá-lo grudado atrás de outra tela.
+window.addEventListener('popstate', ()=>{
+  const painelAberto = document.getElementById('painelGeral').classList.contains('show');
+  if(painelAberto){
+    document.getElementById('painelGeral').classList.remove('show');
+    document.getElementById('clistWrap').classList.remove('hide');
+  }
+});
 
 function renderList(){
   const clist = document.getElementById('clist');
@@ -1211,10 +1225,12 @@ function showList(){
   currentCircuit = null;
   document.getElementById('clistWrap').classList.remove('hide');
   document.getElementById('detail').classList.remove('show');
+  document.getElementById('painelGeral').classList.remove('show');
 }
 function showDetail(){
   document.getElementById('clistWrap').classList.add('hide');
   document.getElementById('detail').classList.add('show');
+  document.getElementById('painelGeral').classList.remove('show');
 }
 
 let selDeIdx = null, selAteIdx = null, selTipo = 'prev';
