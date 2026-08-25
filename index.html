@@ -245,6 +245,13 @@ button.secondary{width:100%;padding:13px;background:transparent;color:var(--text
 .os-panel.corr label{color:#ff8a82;}
 .os-panel input{width:100%;padding:10px;border-radius:8px;border:1px solid #e5484d;background:var(--bg);color:var(--text);font-size:16px;}
 .os-hint{font-size:11px;color:var(--muted);margin-top:6px;line-height:1.4;}
+.os-suggest{display:flex;gap:8px;margin-top:8px;flex-wrap:wrap;}
+.os-suggest-chip{padding:6px 12px;border-radius:999px;border:1px solid var(--amber);background:transparent;
+  color:var(--amber);font-family:var(--disp);font-size:13px;cursor:pointer;}
+.os-suggest-chip.corr{border-color:#e5484d;color:#ff8a82;}
+.os-suggest-chip:active{background:rgba(255,255,255,.08);}
+.next-suggest-btn{width:100%;margin-top:10px;padding:10px;background:var(--panel2);border:1px dashed var(--amber);
+  border-radius:9px;color:var(--amber);font-family:var(--disp);font-size:13px;cursor:pointer;}
 
 .corr-item{margin:0 16px 12px;padding:12px 14px;background:var(--panel);border:1px solid var(--border);border-radius:12px;display:flex;gap:10px;flex-wrap:wrap;align-items:flex-start;}
 .corr-rank{font-family:var(--disp);font-size:15px;color:#e5484d;font-weight:700;min-width:28px;}
@@ -778,6 +785,14 @@ function saveLastOsForCircuit(circId, os){
   m[circId] = os;
   localStorage.setItem(OS_MAP_KEY, JSON.stringify(m));
 }
+// Últimas OS usadas nesse circuito (só as 2 mais recentes), pra sugerir como
+// chips clicáveis em vez do técnico ter que redigitar/olhar de novo.
+function recentOsFor(circId, manutFilter){
+  const recs = loadRecords().filter(r=>r.circId===circId && r.manut===manutFilter && r.os);
+  const lastTsByOs = {};
+  recs.forEach(r=>{ if(!lastTsByOs[r.os] || r.ts>lastTsByOs[r.os]) lastTsByOs[r.os]=r.ts; });
+  return Object.entries(lastTsByOs).sort((a,b)=>b[1]-a[1]).slice(0,2).map(x=>x[0]);
+}
 
 function loadRecords(){
   try{ return JSON.parse(localStorage.getItem(STORAGE_KEY)) || []; }catch(e){ return []; }
@@ -1117,11 +1132,17 @@ function renderPainelGeral(){
     <div class="pg-summary">${cardsPista}</div>
     <div class="pg-section-title">${pgMode==='corr' ? `Pendências corretivas — ${currentPista}` : `Todos os circuitos — ${currentPista}`}</div>
     ${listaHtml}
+
+    <div class="export-bar">
+      <button class="secondary" id="pgExportBtn">📄 Exportar relatório da auditoria (.docx)</button>
+      <div class="hint">Sem fotos — foco em números de OS (preventiva e corretiva) e gráficos comparando a evolução de cada trecho corrigido.</div>
+    </div>
   `;
 
   document.getElementById('pgBackBtn').onclick = ()=>{ history.back(); };
   document.getElementById('pgModePrev').onclick = ()=>{ pgMode='prev'; renderPainelGeral(); };
   document.getElementById('pgModeCorr').onclick = ()=>{ pgMode='corr'; renderPainelGeral(); };
+  document.getElementById('pgExportBtn').onclick = exportPainelGeralRelatorio;
   // Ícone de gráfico abre o histórico do circuito inteiro (Se-NA ao fim da
   // cadeia) — só leitura, sem editar nada aqui no Painel Geral.
   el.querySelectorAll('.pg-trend-btn').forEach(btn=>{
@@ -1273,6 +1294,7 @@ let pendingFoto = null; // {dataUrl, width, height} da foto comprimida, se anexa
 let pendingGeo = null;  // {lat, lng, accuracy} da localização, se disponível
 let geoAttempted = false;
 let currentOS = ''; // nº da OS em vigor no circuito aberto (preventiva) — obrigatório pra salvar
+let activeExportOS = ''; // OS usada como filtro no momento de gerar planilha/relatório
 
 function openDetail(circ){
   currentCircuit = circ;
@@ -1317,6 +1339,7 @@ function renderCorretivaDetail(){
 
   const osOrigens = [...new Set(pendentes.map(x=>x.r.os).filter(Boolean))];
   const osOrigemTxt = osOrigens.length ? `OS Preventiva de origem: ${osOrigens.join(', ')}` : 'OS Preventiva de origem: —';
+  const recentOsListCorr = recentOsFor(circ.id, 'corr');
 
   const rowsHtml = pendentes.map((x,idx)=>{
     const r = x.r;
@@ -1349,16 +1372,29 @@ function renderCorretivaDetail(){
     <div class="os-panel corr">
       <label>Nº da OS corretiva (obrigatório para salvar)</label>
       <input type="text" inputmode="numeric" pattern="[0-9]*" id="corrOsInput" placeholder="ex: 2001" value="${currentCorrOS}">
+      ${recentOsListCorr.length ? `<div class="os-suggest">${recentOsListCorr.map(os=>`<button type="button" class="os-suggest-chip corr" data-os="${os}">${os}</button>`).join('')}</div>` : ''}
       <div class="os-hint">Vinculada à(s) OS preventiva(s) que identificaram estes trechos.</div>
     </div>
 
     <div class="pg-section-title">Trechos pendentes — do mais crítico pro menos crítico</div>
     ${pendentes.length ? rowsHtml : `<div class="pg-empty">✓ Nenhum trecho pendente neste circuito.</div>`}
+
+    <div class="export-bar">
+      <button class="secondary" id="corrExportBtn">Exportar planilha (.xlsx / WhatsApp)</button>
+      <div class="hint">Exporta os registros salvos deste circuito sob a OS corretiva informada acima.</div>
+      <button class="secondary" id="corrExportDocxBtn" style="margin-top:10px;">📄 Exportar relatório (.docx)</button>
+      <div class="hint">Gera um relatório técnico em Word com os dados dessa corretiva.</div>
+    </div>
   `;
 
   document.getElementById('backBtn').onclick = ()=>{ history.back(); };
   const corrOsInput = document.getElementById('corrOsInput');
   corrOsInput.oninput = (e)=>{ e.target.value = e.target.value.replace(/\D/g,''); currentCorrOS = e.target.value; };
+  document.getElementById('corrExportBtn').onclick = ()=>{ activeExportOS = currentCorrOS; exportCircuit(); };
+  document.getElementById('corrExportDocxBtn').onclick = ()=>{ activeExportOS = currentCorrOS; exportDocxCircuit(); };
+  detail.querySelectorAll('.os-suggest-chip').forEach(chip=>{
+    chip.onclick = ()=>{ corrOsInput.value = chip.dataset.os; currentCorrOS = chip.dataset.os; };
+  });
 
   detail.querySelectorAll('.corr-save-btn').forEach(btn=>{
     btn.onclick = ()=>{
@@ -1580,6 +1616,187 @@ function drawTrendChartToCanvas(records, calculada){
   return {dataUrl: canvas.toDataURL('image/jpeg', 0.9), width:W, height:H};
 }
 
+// Igual ao gráfico de tendência normal, mas com DUAS linhas no mesmo
+// desenho: a evolução da preventiva (âmbar) e a da corretiva que resolveu
+// aquele trecho (verde), deixando visível a melhoria entre as duas.
+function drawDualLineChart(prevRecs, corrRecs, calculada, legendaEsquerda, legendaDireita){
+  const W = REPORT_IMG_W, H = REPORT_IMG_H, padL = 60, padR = 24, padT = 34, padB = 40;
+  const plotW = W - padL - padR, plotH = H - padT - padB;
+  const canvas = document.createElement('canvas');
+  canvas.width = W; canvas.height = H;
+  const ctx = canvas.getContext('2d');
+
+  ctx.fillStyle = '#FFFFFF';
+  ctx.fillRect(0, 0, W, H);
+
+  const all = prevRecs.concat(corrRecs);
+  const values = all.map(r=>r.medida).concat([calculada]);
+  const maxV = Math.max(...values) * 1.1 || 1;
+  const minV = 0;
+  // eixo X: ordem cronológica combinada (preventiva sempre antes da corretiva)
+  const n = all.length;
+  const xFor = i => n<=1 ? padL + plotW/2 : padL + (i/(n-1))*plotW;
+  const yFor = v => padT + plotH - ((v-minV)/(maxV-minV))*plotH;
+
+  ctx.strokeStyle = '#999999';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(padL, padT); ctx.lineTo(padL, H-padB); ctx.lineTo(W-padR, H-padB);
+  ctx.stroke();
+
+  const yCalc = yFor(calculada);
+  ctx.strokeStyle = '#C9860A';
+  ctx.setLineDash([6,4]);
+  ctx.beginPath();
+  ctx.moveTo(padL, yCalc); ctx.lineTo(W-padR, yCalc);
+  ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.fillStyle = '#C9860A';
+  ctx.font = '12px monospace';
+  ctx.textAlign = 'right';
+  ctx.fillText(`mínimo ${calculada.toFixed(1)} MΩ`, W-padR, yCalc-6);
+
+  // legenda no topo
+  ctx.font = '12px monospace';
+  ctx.textAlign = 'left';
+  ctx.fillStyle = '#C9860A'; ctx.fillText('● Preventiva', padL, 16);
+  ctx.fillStyle = '#1D9A6C'; ctx.fillText('● Corretiva', padL+130, 16);
+
+  function drawSeries(recs, offset, color){
+    if(recs.length===0) return;
+    if(recs.length>1){
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      recs.forEach((r,i)=>{
+        const x = xFor(offset+i), y = yFor(r.medida);
+        if(i===0) ctx.moveTo(x,y); else ctx.lineTo(x,y);
+      });
+      ctx.stroke();
+    }
+    recs.forEach((r,i)=>{
+      const x = xFor(offset+i), y = yFor(r.medida);
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      ctx.arc(x, y, 5, 0, Math.PI*2);
+      ctx.fill();
+      ctx.strokeStyle = '#FFFFFF';
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+    });
+  }
+  drawSeries(prevRecs, 0, '#C9860A');
+  drawSeries(corrRecs, prevRecs.length, '#1D9A6C');
+
+  // linha tracejada fina ligando o último ponto da preventiva ao primeiro
+  // da corretiva, deixando clara a transição entre as duas fases
+  if(prevRecs.length>0 && corrRecs.length>0){
+    ctx.strokeStyle = '#999999';
+    ctx.setLineDash([3,3]);
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(xFor(prevRecs.length-1), yFor(prevRecs[prevRecs.length-1].medida));
+    ctx.lineTo(xFor(prevRecs.length), yFor(corrRecs[0].medida));
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+
+  ctx.fillStyle = '#555555';
+  ctx.font = '11px monospace';
+  if(all.length>=1){
+    ctx.textAlign = 'left';
+    ctx.fillText(new Date(all[0].ts).toLocaleDateString('pt-BR'), padL, H-12);
+  }
+  if(all.length>=2){
+    ctx.textAlign = 'right';
+    ctx.fillText(new Date(all[all.length-1].ts).toLocaleDateString('pt-BR'), W-padR, H-12);
+  }
+
+  return {dataUrl: canvas.toDataURL('image/jpeg', 0.9), width:W, height:H};
+}
+
+// ---------------------------------------------------------------
+// RELATÓRIO DO PAINEL GERAL — visão de auditoria, sem fotos, focado em
+// números de OS (preventiva/corretiva) e na evolução dos trechos que
+// tiveram corretiva (preventiva x corretiva no mesmo gráfico).
+// ---------------------------------------------------------------
+async function exportPainelGeralRelatorio(){
+  try{
+    const circuits = (CIRCUIT_DATA[currentPista]||[]).filter(c=>!c.sem_dados);
+    const doc = new SimpleDocx();
+    const hoje = new Date().toLocaleDateString('pt-BR');
+
+    doc.heading('RELATÓRIO GERAL DE ISOLAÇÃO — AUDITORIA', 1);
+    doc.paragraph(`Pista: ${currentPista}`);
+    doc.paragraph(`Data de emissão: ${hoje}`);
+
+    doc.heading('1. Resumo por circuito', 2);
+    const tableRows = [];
+    circuits.forEach(circ=>{
+      const vals = Object.values(latestByRangeMap(circ));
+      if(vals.length===0) return;
+      const situacaoGeral = vals.some(r=>r.situacao==='FALHA') ? 'COM PENDÊNCIA' : 'NORMAL';
+      const prevOsList = [...new Set(vals.filter(r=>r.manut==='prev').map(r=>r.os).filter(Boolean))];
+      const corrOsList = [...new Set(vals.filter(r=>r.manut==='corr').map(r=>r.os).filter(Boolean))];
+      tableRows.push([circLabel(circ), prevOsList.join(', ')||'—', corrOsList.join(', ')||'—', situacaoGeral]);
+    });
+    if(tableRows.length===0){
+      doc.paragraph('Nenhum circuito com medições registradas ainda nesta pista.');
+    } else {
+      doc.table(['Circuito','OS Preventiva','OS Corretiva','Situação'], tableRows);
+    }
+
+    doc.heading('2. Evolução dos trechos com corretiva', 2);
+    let anyChart = false;
+    circuits.forEach(circ=>{
+      const allRecs = loadRecords().filter(r=>r.circId===circ.id);
+      const byRange = {};
+      allRecs.forEach(r=>{
+        const key = r.deIdx+'|'+r.ateIdx;
+        (byRange[key] = byRange[key]||[]).push(r);
+      });
+      Object.keys(byRange).forEach(key=>{
+        const recs = byRange[key].slice().sort((a,b)=>a.ts-b.ts);
+        const prevSeries = recs.filter(r=>r.manut==='prev');
+        const corrSeries = recs.filter(r=>r.manut==='corr');
+        if(prevSeries.length===0 || corrSeries.length===0) return; // só quem teve as duas fases
+        const calculada = recs[recs.length-1].calculada || 0;
+        const chart = drawDualLineChart(prevSeries, corrSeries, calculada);
+        const prevOs = [...new Set(prevSeries.map(r=>r.os))].filter(Boolean).join(', ');
+        const corrOs = [...new Set(corrSeries.map(r=>r.os))].filter(Boolean).join(', ');
+        doc.image(chart.dataUrl, chart.width, chart.height, [
+          `${circLabel(circ)} — ${recs[0].de} → ${recs[0].ate}`,
+          `OS Preventiva: ${prevOs||'—'}  ·  OS Corretiva: ${corrOs||'—'}`
+        ]);
+        anyChart = true;
+      });
+    });
+    if(!anyChart){
+      doc.paragraph('Nenhum trecho com preventiva e corretiva registradas ainda para comparar.');
+    }
+
+    const bytes = doc.toBytes();
+    const blob = new Blob([bytes], {type:'application/vnd.openxmlformats-officedocument.wordprocessingml.document'});
+    const filename = `relatorio_auditoria_${currentPista.replace(/\//g,'-')}.docx`;
+    const file = new File([blob], filename, {type: blob.type});
+    if(navigator.share && navigator.canShare && navigator.canShare({files:[file]})){
+      try{
+        await navigator.share({files:[file], title:'Relatório de auditoria — '+currentPista});
+        return;
+      }catch(e){ if(e && e.name==='AbortError') return; }
+    }
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = filename;
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(url);
+    showToast('Relatório baixado: '+filename);
+  }catch(e){
+    console.error('Falha ao gerar relatório do painel geral:', e);
+    showErrorPanel('Erro ao gerar relatório da auditoria:', (e && e.stack) || String(e));
+  }
+}
+
 // Point labels can repeat (loop circuits start/end at the same physical point,
 // e.g. "Se-NA" -> ... -> "Se-NA"), so selection must use position in the chain,
 // never the label text, or "De"/"Até" collapse onto the same point.
@@ -1686,11 +1903,30 @@ function computeFreeSearch(circ, tokenDe, tokenAte){
   return {comprimento,trafos,total_uA,calculada,estimado};
 }
 
+// Sugere o próximo trecho na sequência lógica de campo: Se-NA→Se-NA
+// (circuito inteiro) primeiro, depois Se-NA→1º ponto, depois 1º→2º ponto,
+// e assim por diante, seguindo a ordem física da cadeia.
+function suggestNextRange(circ){
+  const recs = loadRecords().filter(r=>r.circId===circ.id && r.os===currentOS && r.manut==='prev');
+  const lastIdx = circ.pontos.length-1;
+  if(recs.length===0) return {i:0, j:lastIdx};
+  const hasFull = recs.some(r=>r.deIdx===0 && r.ateIdx===lastIdx);
+  if(!hasFull) return {i:0, j:lastIdx};
+  const subs = recs.filter(r=>!(r.deIdx===0 && r.ateIdx===lastIdx));
+  if(subs.length===0) return lastIdx>=1 ? {i:0, j:1} : null;
+  const maxJ = Math.max(...subs.map(r=>r.ateIdx));
+  if(maxJ+1<=lastIdx) return {i:maxJ, j:maxJ+1};
+  return null; // sequência completa
+}
+
 function renderDetail(){
   const circ = currentCircuit;
   const detail = document.getElementById('detail');
   const calc = computeRange(circ, selDeIdx, selAteIdx);
   const lastOsHint = loadOsMap()[circ.id] || '';
+  const recentOsListPrev = recentOsFor(circ.id, 'prev');
+  const nextSuggestion = suggestNextRange(circ);
+  const isSuggestionAlreadySelected = nextSuggestion && selDeIdx===nextSuggestion.i && selAteIdx===nextSuggestion.j;
 
   // strip visual
   const totalLen = circ.pontos[circ.pontos.length-1].cum_len || 1;
@@ -1734,6 +1970,7 @@ function renderDetail(){
     <div class="os-panel">
       <label>Nº da ordem de serviço (obrigatório para salvar)</label>
       <input type="text" inputmode="numeric" pattern="[0-9]*" id="osInput" placeholder="ex: 1042" value="${currentOS}">
+      ${recentOsListPrev.length ? `<div class="os-suggest">${recentOsListPrev.map(os=>`<button type="button" class="os-suggest-chip" data-os="${os}">${os}</button>`).join('')}</div>` : ''}
       <div class="os-hint">${lastOsHint ? `Última OS usada neste circuito: ${lastOsHint}. Digite o mesmo número pra continuar nessa leva, ou um número diferente pra começar uma nova.` : 'Toda medição salva fica vinculada a este número.'}</div>
     </div>
 
@@ -1758,6 +1995,7 @@ function renderDetail(){
           <select id="selAte">${optionsHtml}</select>
         </div>
       </div>
+      ${nextSuggestion && !isSuggestionAlreadySelected ? `<button type="button" class="next-suggest-btn" id="nextSuggestBtn">➜ Próximo da sequência: ${circ.pontos[nextSuggestion.i].label} → ${circ.pontos[nextSuggestion.j].label}</button>` : ''}
       <div class="field">
         <label>Valor medido (MΩ)</label>
         <input type="number" step="any" inputmode="decimal" id="medidaInput" placeholder="ex: 145" value="${medidaVal}">
@@ -1825,6 +2063,10 @@ function renderDetail(){
   document.getElementById('selAte').value = String(selAteIdx);
   document.getElementById('selDe').onchange = (e)=>{ selDeIdx=parseInt(e.target.value,10); renderDetail(); };
   document.getElementById('selAte').onchange = (e)=>{ selAteIdx=parseInt(e.target.value,10); renderDetail(); };
+  const nextSuggestBtn = document.getElementById('nextSuggestBtn');
+  if(nextSuggestBtn){
+    nextSuggestBtn.onclick = ()=>{ selDeIdx=nextSuggestion.i; selAteIdx=nextSuggestion.j; renderDetail(); };
+  }
   const medidaInput = document.getElementById('medidaInput');
   medidaInput.oninput = (e)=>{ detail.dataset.medida = e.target.value; updateStatusPill(); };
   document.getElementById('saveBtn').onclick = saveMeasurement;
@@ -1836,6 +2078,13 @@ function renderDetail(){
     currentOS = e.target.value;
     renderHistory(); // a lista de registros da tela reflete só a OS ativa
   };
+  detail.querySelectorAll('.os-suggest-chip').forEach(chip=>{
+    chip.onclick = ()=>{
+      osInput.value = chip.dataset.os;
+      currentOS = chip.dataset.os;
+      renderHistory();
+    };
+  });
 
   // foto: botão abre o seletor de arquivo/câmera; ao escolher, comprime e mostra prévia
   document.getElementById('fotoBtn').onclick = ()=> document.getElementById('fotoInput').click();
@@ -1852,8 +2101,8 @@ function renderDetail(){
   };
   renderFotoPreview();
   updateGeoStatus();
-  document.getElementById('exportBtn').onclick = exportCircuit;
-  document.getElementById('exportDocxBtn').onclick = exportDocxCircuit;
+  document.getElementById('exportBtn').onclick = ()=>{ activeExportOS = currentOS; exportCircuit(); };
+  document.getElementById('exportDocxBtn').onclick = ()=>{ activeExportOS = currentOS; exportDocxCircuit(); };
 
   if(circuitSupportsFreeSearch(circ)){
     const fsDe = document.getElementById('fsDe');
@@ -2148,7 +2397,7 @@ function csvEscape(v){
 // ---------------------------------------------------------------
 function buildStyledXlsxForCircuit(circ){
   // último registro salvo (ou importado) por trecho, indexado por De|Até
-  const recs = loadRecords().filter(r=>r.circId===circ.id && r.os===currentOS);
+  const recs = loadRecords().filter(r=>r.circId===circ.id && r.os===activeExportOS);
   const latestByKey = {};
   recs.forEach(r=>{
     const key = groupKeyFor(circ, r);
@@ -2476,7 +2725,7 @@ class SimpleDocx {
 // medições, fotos anexadas (com legenda e coordenadas quando houver) e
 // espaço pra conclusão/assinatura — mesma estrutura do modelo fornecido.
 async function buildDocxForCircuit(circ){
-  const recs = loadRecords().filter(r=>r.circId===circ.id && r.os===currentOS);
+  const recs = loadRecords().filter(r=>r.circId===circ.id && r.os===activeExportOS);
   const latestByKey = {};
   recs.forEach(r=>{
     const key = groupKeyFor(circ, r);
@@ -2493,7 +2742,7 @@ async function buildDocxForCircuit(circ){
   doc.heading('1. Dados do Circuito', 2);
   doc.paragraph(`Circuito: ${circLabel(circ)}`);
   doc.paragraph(`Local/Pista: ${currentPista}`);
-  doc.paragraph(`Ordem de Serviço nº: ${currentOS}`);
+  doc.paragraph(`Ordem de Serviço nº: ${activeExportOS}`);
   doc.paragraph(`Data da emissão: ${hoje}`);
   doc.paragraph(`Tensão do circuito: ${circ.tensao} V`);
 
@@ -2560,7 +2809,7 @@ async function buildDocxForCircuit(circ){
 
 
 function buildCsvForCircuit(circ){
-  const recs = loadRecords().filter(r=>r.circId===circ.id && r.os===currentOS);
+  const recs = loadRecords().filter(r=>r.circId===circ.id && r.os===activeExportOS);
   const latestByRange = {};
   recs.forEach(r=>{
     const key = groupKeyFor(circ, r);
@@ -2582,7 +2831,7 @@ function buildCsvForCircuit(circ){
 }
 
 function buildTextSummary(circ){
-  const recs = loadRecords().filter(r=>r.circId===circ.id && r.os===currentOS);
+  const recs = loadRecords().filter(r=>r.circId===circ.id && r.os===activeExportOS);
   const latestByRange = {};
   recs.forEach(r=>{
     const key = groupKeyFor(circ, r);
@@ -2602,7 +2851,7 @@ function buildTextSummary(circ){
 
 async function exportCircuit(){
   const circ = currentCircuit;
-  const recs = loadRecords().filter(r=>r.circId===circ.id && r.os===currentOS);
+  const recs = loadRecords().filter(r=>r.circId===circ.id && r.os===activeExportOS);
   if(recs.length===0){ showToast('Nenhum registro para exportar ainda.'); return; }
   const text = buildTextSummary(circ);
   const xlsxFilename = circLabel(circ).replace(/\s+/g,'_') + '.xlsx';
@@ -2671,7 +2920,7 @@ async function exportCircuit(){
 
 async function exportDocxCircuit(){
   const circ = currentCircuit;
-  const recs = loadRecords().filter(r=>r.circId===circ.id && r.os===currentOS);
+  const recs = loadRecords().filter(r=>r.circId===circ.id && r.os===activeExportOS);
   if(recs.length===0){ showToast('Nenhum registro para gerar relatório ainda.'); return; }
 
   let docxBlob = null;
