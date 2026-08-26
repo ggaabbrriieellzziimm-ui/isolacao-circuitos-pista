@@ -1715,6 +1715,64 @@ function drawDualLineChart(prevRecs, corrRecs, calculada, legendaEsquerda, legen
   return {dataUrl: canvas.toDataURL('image/jpeg', 0.9), width:W, height:H};
 }
 
+// Gráfico de barras: uma barra por trecho do circuito, altura = medida
+// (MΩ), verde se normal / vermelho se em falha. Bate o olho rápido em
+// qual trecho está comprometido, sem rolar página por página.
+function drawBarChartForCircuit(circLabel, items){
+  const W = 960, H = 480, padL = 60, padR = 20, padT = 30, padB = 90;
+  const plotW = W - padL - padR, plotH = H - padT - padB;
+  const canvas = document.createElement('canvas');
+  canvas.width = W; canvas.height = H;
+  const ctx = canvas.getContext('2d');
+
+  ctx.fillStyle = '#FFFFFF';
+  ctx.fillRect(0, 0, W, H);
+
+  ctx.fillStyle = '#222222';
+  ctx.font = 'bold 14px monospace';
+  ctx.textAlign = 'left';
+  ctx.fillText(circLabel, padL, 18);
+
+  const n = items.length;
+  const maxV = Math.max(...items.map(it=>it.medida)) * 1.15 || 1;
+  const slot = plotW / n;
+  const barW = Math.min(slot * 0.6, 46);
+  const yFor = v => padT + plotH - (v/maxV)*plotH;
+
+  // eixo
+  ctx.strokeStyle = '#999999';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(padL, padT); ctx.lineTo(padL, H-padB); ctx.lineTo(W-padR, H-padB);
+  ctx.stroke();
+
+  items.forEach((it, i)=>{
+    const cx = padL + slot*i + slot/2;
+    const x = cx - barW/2;
+    const y = yFor(it.medida);
+    const h = (H-padB) - y;
+    ctx.fillStyle = it.situacao==='NORMAL' ? '#1D9A6C' : '#D8392F';
+    ctx.fillRect(x, y, barW, h);
+    // valor em cima da barra
+    ctx.fillStyle = '#333333';
+    ctx.font = '10px monospace';
+    ctx.textAlign = 'center';
+    const valTxt = it.medida>=1000 ? (it.medida/1000).toFixed(1)+'k' : String(it.medida);
+    ctx.fillText(valTxt, cx, Math.max(y-4, 12));
+    // rótulo do trecho (rotacionado, senão não cabe)
+    ctx.save();
+    ctx.translate(cx, H-padB+8);
+    ctx.rotate(-Math.PI/4);
+    ctx.textAlign = 'right';
+    ctx.fillStyle = '#555555';
+    ctx.font = '10px monospace';
+    ctx.fillText(it.label, 0, 0);
+    ctx.restore();
+  });
+
+  return {dataUrl: canvas.toDataURL('image/jpeg', 0.9), width:W, height:H};
+}
+
 // ---------------------------------------------------------------
 // RELATÓRIO DO PAINEL GERAL — visão de auditoria, sem fotos, focado em
 // números de OS (preventiva/corretiva) e na evolução dos trechos que
@@ -1770,41 +1828,32 @@ async function exportPainelGeralRelatorio(){
       doc.paragraph('Nenhuma medição do circuito inteiro (Se-NA a Se-NA) registrada ainda.');
     }
 
-    // 3) Evolução de CADA trecho que já tem ao menos uma medição preventiva
-    // — com ou sem corretiva. Serve de base pra comparar ano após ano;
-    // quando o trecho também teve corretiva, aparece a segunda linha
-    // (verde) mostrando a melhoria conseguida.
-    doc.heading('3. Evolução por trecho (todas as medições preventivas)', 2);
-    let anyTrechoChart = false;
+    // 3) Gráfico de barras por circuito — uma barra por trecho, colorida
+    // por situação (verde=normal, vermelho=falha). Mostra o estado ATUAL
+    // (última medição de cada trecho) — bate o olho rápido no que está
+    // comprometido, sem rolar página por página de gráficos de linha.
+    doc.heading('3. Situação atual por trecho (gráfico de barras)', 2);
+    let anyBarChart = false;
     circuits.forEach(circ=>{
-      const allRecs = loadRecords().filter(r=>r.circId===circ.id);
-      const byRange = {};
-      allRecs.forEach(r=>{
-        const key = groupKeyFor(circ, r); // mesma lógica usada no resto do app —
-        // resolve pela posição real do ponto, funciona também pros registros
-        // importados das planilhas originais (sem deIdx/ateIdx salvos).
-        (byRange[key] = byRange[key]||[]).push(r);
-      });
-      Object.keys(byRange).forEach(key=>{
-        const recs = byRange[key].slice().sort((a,b)=>a.ts-b.ts);
-        const prevSeries = recs.filter(r=>r.manut==='prev');
-        const corrSeries = recs.filter(r=>r.manut==='corr');
-        if(prevSeries.length===0) return; // exige ao menos 1 OS preventiva
-        const calculada = recs[recs.length-1].calculada || 0;
-        const chart = drawDualLineChart(prevSeries, corrSeries, calculada);
-        const prevOs = [...new Set(prevSeries.map(r=>r.os))].filter(Boolean).join(', ');
-        const corrOs = [...new Set(corrSeries.map(r=>r.os))].filter(Boolean).join(', ');
-        doc.image(chart.dataUrl, chart.width, chart.height, [
-          `${circLabel(circ)} — ${recs[0].de} → ${recs[0].ate}`,
-          corrSeries.length
-            ? `OS Preventiva: ${prevOs||'—'}  ·  OS Corretiva: ${corrOs||'—'}`
-            : `OS Preventiva: ${prevOs||'—'}`
-        ]);
-        anyTrechoChart = true;
-      });
+      const latest = Object.values(latestByRangeMap(circ))
+        .filter(r=>r.manut==='prev' || r.manut==='corr');
+      if(latest.length===0) return;
+      const ordered = latest.sort((a,b)=>recordPosition(circ,a)-recordPosition(circ,b));
+      const items = ordered.map(r=>({
+        label: `${r.de}→${r.ate}`,
+        medida: r.medida,
+        situacao: r.situacao
+      }));
+      const chart = drawBarChartForCircuit(circLabel(circ), items);
+      const osList = [...new Set(ordered.map(r=>r.os))].filter(Boolean).join(', ');
+      doc.image(chart.dataUrl, chart.width, chart.height, [
+        `${circLabel(circ)} — ${items.length} trecho(s) medido(s)`,
+        `OS: ${osList||'—'}`
+      ]);
+      anyBarChart = true;
     });
-    if(!anyTrechoChart){
-      doc.paragraph('Nenhum trecho com medição preventiva registrada ainda.');
+    if(!anyBarChart){
+      doc.paragraph('Nenhum circuito com medições registradas ainda nesta pista.');
     }
 
     const bytes = doc.toBytes();
