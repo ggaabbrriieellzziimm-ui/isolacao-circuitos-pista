@@ -1746,8 +1746,36 @@ async function exportPainelGeralRelatorio(){
       doc.table(['Circuito','OS Preventiva','OS Corretiva','Situação'], tableRows);
     }
 
-    doc.heading('2. Evolução dos trechos com corretiva', 2);
-    let anyChart = false;
+    // 2) Gráfico geral do circuito inteiro (Se-NA ao fim da cadeia), com
+    // TODAS as leituras já feitas ao longo do tempo (todas as OS/visitas) —
+    // aparece pra todo circuito com pelo menos 1 medição, serve como
+    // comparativo ano após ano mesmo sem nunca ter tido corretiva.
+    doc.heading('2. Evolução geral do circuito (todas as visitas)', 2);
+    let anyGeneralChart = false;
+    circuits.forEach(circ=>{
+      const lastIdx = circ.pontos.length-1;
+      const hist = getTrendHistory(circ, 0, lastIdx);
+      if(hist.length===0) return;
+      const calc = computeRange(circ, 0, lastIdx);
+      const calculada = calc ? calc.calculada : (hist[hist.length-1].calculada||0);
+      const chart = drawTrendChartToCanvas(hist, calculada);
+      const osList = [...new Set(hist.map(r=>r.os))].filter(Boolean).join(', ');
+      doc.image(chart.dataUrl, chart.width, chart.height, [
+        `${circLabel(circ)} — Se-NA → Se-NA (circuito inteiro)`,
+        `OS ao longo do tempo: ${osList||'—'}  ·  ${hist.length} medição(ões)`
+      ]);
+      anyGeneralChart = true;
+    });
+    if(!anyGeneralChart){
+      doc.paragraph('Nenhuma medição do circuito inteiro (Se-NA a Se-NA) registrada ainda.');
+    }
+
+    // 3) Evolução de CADA trecho que já tem ao menos uma medição preventiva
+    // — com ou sem corretiva. Serve de base pra comparar ano após ano;
+    // quando o trecho também teve corretiva, aparece a segunda linha
+    // (verde) mostrando a melhoria conseguida.
+    doc.heading('3. Evolução por trecho (todas as medições preventivas)', 2);
+    let anyTrechoChart = false;
     circuits.forEach(circ=>{
       const allRecs = loadRecords().filter(r=>r.circId===circ.id);
       const byRange = {};
@@ -1759,20 +1787,22 @@ async function exportPainelGeralRelatorio(){
         const recs = byRange[key].slice().sort((a,b)=>a.ts-b.ts);
         const prevSeries = recs.filter(r=>r.manut==='prev');
         const corrSeries = recs.filter(r=>r.manut==='corr');
-        if(prevSeries.length===0 || corrSeries.length===0) return; // só quem teve as duas fases
+        if(prevSeries.length===0) return; // exige ao menos 1 OS preventiva
         const calculada = recs[recs.length-1].calculada || 0;
         const chart = drawDualLineChart(prevSeries, corrSeries, calculada);
         const prevOs = [...new Set(prevSeries.map(r=>r.os))].filter(Boolean).join(', ');
         const corrOs = [...new Set(corrSeries.map(r=>r.os))].filter(Boolean).join(', ');
         doc.image(chart.dataUrl, chart.width, chart.height, [
           `${circLabel(circ)} — ${recs[0].de} → ${recs[0].ate}`,
-          `OS Preventiva: ${prevOs||'—'}  ·  OS Corretiva: ${corrOs||'—'}`
+          corrSeries.length
+            ? `OS Preventiva: ${prevOs||'—'}  ·  OS Corretiva: ${corrOs||'—'}`
+            : `OS Preventiva: ${prevOs||'—'}`
         ]);
-        anyChart = true;
+        anyTrechoChart = true;
       });
     });
-    if(!anyChart){
-      doc.paragraph('Nenhum trecho com preventiva e corretiva registradas ainda para comparar.');
+    if(!anyTrechoChart){
+      doc.paragraph('Nenhum trecho com medição preventiva registrada ainda.');
     }
 
     const bytes = doc.toBytes();
@@ -2009,6 +2039,8 @@ function renderDetail(){
       <div class="geo-status" id="geoStatus"></div>
     </div>
 
+    <button class="primary" id="saveBtn">Salvar medição</button>
+
     <div class="readout">
       <div class="ro-grid">
         <div class="ro-item"><div class="k">Comprimento do trecho</div><div class="v">${calc?calc.comprimento+' m':'—'}</div></div>
@@ -2022,8 +2054,6 @@ function renderDetail(){
         <div id="statusPill"></div>
       </div>
     </div>
-
-    <button class="primary" id="saveBtn">Salvar medição</button>
 
     <div class="hist-section">
       <div class="hist-title"><span>Registros salvos</span> <span id="histCount"></span></div>
@@ -2186,9 +2216,13 @@ function saveMeasurement(){
   saveLastOsForCircuit(currentCircuit.id, currentOS);
   showToast(situacao==='NORMAL' ? 'Salvo — trecho NORMAL.' : 'Salvo — TRECHO COM POTENCIAL DE FALHA.');
   pendingFoto = null;
-  renderFotoPreview();
-  renderHistory();
-  renderList();
+  // avança automaticamente pro próximo trecho da sequência e redesenha a
+  // tela inteira — sem isso, a sugestão ficava "congelada" na mesma depois
+  // de salvar, e o campo de medida continuava com o valor antigo.
+  const next = suggestNextRange(currentCircuit);
+  if(next){ selDeIdx = next.i; selAteIdx = next.j; }
+  document.getElementById('detail').dataset.medida = '';
+  renderDetail();
 }
 
 // ---------------------------------------------------------------
