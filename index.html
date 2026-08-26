@@ -1780,7 +1780,9 @@ async function exportPainelGeralRelatorio(){
       const allRecs = loadRecords().filter(r=>r.circId===circ.id);
       const byRange = {};
       allRecs.forEach(r=>{
-        const key = r.deIdx+'|'+r.ateIdx;
+        const key = groupKeyFor(circ, r); // mesma lógica usada no resto do app —
+        // resolve pela posição real do ponto, funciona também pros registros
+        // importados das planilhas originais (sem deIdx/ateIdx salvos).
         (byRange[key] = byRange[key]||[]).push(r);
       });
       Object.keys(byRange).forEach(key=>{
