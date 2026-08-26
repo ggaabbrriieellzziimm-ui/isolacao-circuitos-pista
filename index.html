@@ -1773,6 +1773,70 @@ function drawBarChartForCircuit(circLabel, items){
   return {dataUrl: canvas.toDataURL('image/jpeg', 0.9), width:W, height:H};
 }
 
+// Gráfico ÚNICO e consolidado: uma barra por circuito, altura = razão
+// entre o pior trecho medido e o seu próprio mínimo normativo (1.0 = na
+// linha de corte). Verde acima da linha, vermelho abaixo — dá visão
+// executiva da pista inteira numa imagem só, sem precisar abrir gráfico
+// por gráfico.
+function drawConsolidatedComplianceChart(items){
+  const W = 980, H = 500, padL = 60, padR = 20, padT = 30, padB = 110;
+  const plotW = W - padL - padR, plotH = H - padT - padB;
+  const canvas = document.createElement('canvas');
+  canvas.width = W; canvas.height = H;
+  const ctx = canvas.getContext('2d');
+
+  ctx.fillStyle = '#FFFFFF';
+  ctx.fillRect(0, 0, W, H);
+
+  const CAP = 2.0; // teto visual da barra (1.0 = linha de corte); valores
+  // maiores só "encostam" no teto, mas o rótulo mostra o valor real.
+  const n = items.length;
+  const slot = plotW / n;
+  const barW = Math.min(slot * 0.55, 40);
+  const yFor = ratio => padT + plotH - (Math.min(ratio, CAP)/CAP)*plotH;
+  const yLine = yFor(1.0);
+
+  ctx.strokeStyle = '#999999';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(padL, padT); ctx.lineTo(padL, H-padB); ctx.lineTo(W-padR, H-padB);
+  ctx.stroke();
+
+  ctx.strokeStyle = '#C9860A';
+  ctx.setLineDash([6,4]);
+  ctx.beginPath();
+  ctx.moveTo(padL, yLine); ctx.lineTo(W-padR, yLine);
+  ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.fillStyle = '#C9860A';
+  ctx.font = '11px monospace';
+  ctx.textAlign = 'right';
+  ctx.fillText('limite normativo (100% do mínimo)', W-padR, yLine-6);
+
+  items.forEach((it, i)=>{
+    const cx = padL + slot*i + slot/2;
+    const x = cx - barW/2;
+    const y = yFor(it.ratio);
+    const h = (H-padB) - y;
+    ctx.fillStyle = it.ratio>=1 ? '#1D9A6C' : '#D8392F';
+    ctx.fillRect(x, y, barW, h);
+    ctx.fillStyle = '#333333';
+    ctx.font = 'bold 10px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText(`${Math.round(it.ratio*100)}%`, cx, Math.max(y-4, 12));
+    ctx.save();
+    ctx.translate(cx, H-padB+8);
+    ctx.rotate(-Math.PI/4);
+    ctx.textAlign = 'right';
+    ctx.fillStyle = '#555555';
+    ctx.font = '10px monospace';
+    ctx.fillText(it.label, 0, 0);
+    ctx.restore();
+  });
+
+  return {dataUrl: canvas.toDataURL('image/jpeg', 0.9), width:W, height:H};
+}
+
 // ---------------------------------------------------------------
 // RELATÓRIO DO PAINEL GERAL — visão de auditoria, sem fotos, focado em
 // números de OS (preventiva/corretiva) e na evolução dos trechos que
@@ -1788,72 +1852,95 @@ async function exportPainelGeralRelatorio(){
     doc.paragraph(`Pista: ${currentPista}`);
     doc.paragraph(`Data de emissão: ${hoje}`);
 
-    doc.heading('1. Resumo por circuito', 2);
+    doc.heading('1. Tabela mestra — resumo por circuito', 2);
+    const tableHeaders = ['Circuito/Subsistema','Trechos Totais','Trechos c/ Pendência','Menor Isolação (MΩ)','OS Preventiva','OS Corretiva','Status Final'];
     const tableRows = [];
+    const rowHighlights = [];
+    const consolidatedItems = []; // pro gráfico único da seção 2
+    const circuitosComPendencia = []; // pro anexo da seção 3
+
     circuits.forEach(circ=>{
-      const vals = Object.values(latestByRangeMap(circ));
+      const vals = Object.values(latestByRangeMap(circ)).filter(r=>r.manut==='prev'||r.manut==='corr');
       if(vals.length===0) return;
-      const situacaoGeral = vals.some(r=>r.situacao==='FALHA') ? 'COM PENDÊNCIA' : 'NORMAL';
+      const falhas = vals.filter(r=>r.situacao==='FALHA');
+      const comPendencia = falhas.length>0;
+      // "pior trecho" = o que está mais longe do próprio mínimo (pior razão medida/mínimo)
+      const pior = vals.reduce((worst, r)=>{
+        const ratio = r.calculada>0 ? r.medida/r.calculada : 999;
+        const worstRatio = worst.calculada>0 ? worst.medida/worst.calculada : 999;
+        return ratio<worstRatio ? r : worst;
+      }, vals[0]);
+      const piorRatio = pior.calculada>0 ? pior.medida/pior.calculada : 1;
       const prevOsList = [...new Set(vals.filter(r=>r.manut==='prev').map(r=>r.os).filter(Boolean))];
       const corrOsList = [...new Set(vals.filter(r=>r.manut==='corr').map(r=>r.os).filter(Boolean))];
-      tableRows.push([circLabel(circ), prevOsList.join(', ')||'—', corrOsList.join(', ')||'—', situacaoGeral]);
+
+      tableRows.push([
+        circLabel(circ),
+        vals.length,
+        falhas.length,
+        `${pior.medida} (Mín: ${(pior.calculada||0).toFixed(1)})`,
+        prevOsList.join(', ')||'—',
+        corrOsList.join(', ')||'—',
+        comPendencia ? 'COM PENDÊNCIA' : 'NORMAL'
+      ]);
+      rowHighlights.push(comPendencia);
+      consolidatedItems.push({label: circLabel(circ), ratio: piorRatio});
+      if(comPendencia) circuitosComPendencia.push(circ);
     });
+
     if(tableRows.length===0){
       doc.paragraph('Nenhum circuito com medições registradas ainda nesta pista.');
     } else {
-      doc.table(['Circuito','OS Preventiva','OS Corretiva','Situação'], tableRows);
+      doc.table(tableHeaders, tableRows, rowHighlights);
     }
 
-    // 2) Gráfico geral do circuito inteiro (Se-NA ao fim da cadeia), com
-    // TODAS as leituras já feitas ao longo do tempo (todas as OS/visitas) —
-    // aparece pra todo circuito com pelo menos 1 medição, serve como
-    // comparativo ano após ano mesmo sem nunca ter tido corretiva.
-    doc.heading('2. Evolução geral do circuito (todas as visitas)', 2);
-    let anyGeneralChart = false;
-    circuits.forEach(circ=>{
-      const lastIdx = circ.pontos.length-1;
-      const hist = getTrendHistory(circ, 0, lastIdx);
-      if(hist.length===0) return;
-      const calc = computeRange(circ, 0, lastIdx);
-      const calculada = calc ? calc.calculada : (hist[hist.length-1].calculada||0);
-      const chart = drawTrendChartToCanvas(hist, calculada);
-      const osList = [...new Set(hist.map(r=>r.os))].filter(Boolean).join(', ');
-      doc.image(chart.dataUrl, chart.width, chart.height, [
-        `${circLabel(circ)} — Se-NA → Se-NA (circuito inteiro)`,
-        `OS ao longo do tempo: ${osList||'—'}  ·  ${hist.length} medição(ões)`
-      ]);
-      anyGeneralChart = true;
-    });
-    if(!anyGeneralChart){
-      doc.paragraph('Nenhuma medição do circuito inteiro (Se-NA a Se-NA) registrada ainda.');
-    }
-
-    // 3) Gráfico de barras por circuito — uma barra por trecho, colorida
-    // por situação (verde=normal, vermelho=falha). Mostra o estado ATUAL
-    // (última medição de cada trecho) — bate o olho rápido no que está
-    // comprometido, sem rolar página por página de gráficos de linha.
-    doc.heading('3. Situação atual por trecho (gráfico de barras)', 2);
-    let anyBarChart = false;
-    circuits.forEach(circ=>{
-      const latest = Object.values(latestByRangeMap(circ))
-        .filter(r=>r.manut==='prev' || r.manut==='corr');
-      if(latest.length===0) return;
-      const ordered = latest.sort((a,b)=>recordPosition(circ,a)-recordPosition(circ,b));
-      const items = ordered.map(r=>({
-        label: `${r.de}→${r.ate}`,
-        medida: r.medida,
-        situacao: r.situacao
-      }));
-      const chart = drawBarChartForCircuit(circLabel(circ), items);
-      const osList = [...new Set(ordered.map(r=>r.os))].filter(Boolean).join(', ');
-      doc.image(chart.dataUrl, chart.width, chart.height, [
-        `${circLabel(circ)} — ${items.length} trecho(s) medido(s)`,
-        `OS: ${osList||'—'}`
-      ]);
-      anyBarChart = true;
-    });
-    if(!anyBarChart){
+    // 2) Gráfico ÚNICO consolidado — pior trecho de cada circuito vs seu
+    // próprio limite normativo. Visão executiva da pista inteira numa
+    // imagem só: barras verdes acima da linha = pista liberada; qualquer
+    // barra vermelha aponta na hora quais circuitos precisam de atenção.
+    doc.heading('2. Comparativo geral — pior trecho de cada circuito', 2);
+    if(consolidatedItems.length===0){
       doc.paragraph('Nenhum circuito com medições registradas ainda nesta pista.');
+    } else {
+      const chart = drawConsolidatedComplianceChart(consolidatedItems);
+      doc.image(chart.dataUrl, chart.width, chart.height, [
+        `${currentPista} — ${consolidatedItems.length} circuito(s)`,
+        'Barra = pior trecho medido, em % do próprio mínimo normativo. Abaixo de 100% = pendência.'
+      ]);
+    }
+
+    // 3) Anexo técnico — detalhamento sob demanda. Só os circuitos COM
+    // PENDÊNCIA ganham gráfico individual aqui (barras por trecho +
+    // evolução ano a ano, se houver histórico do circuito inteiro).
+    // Circuitos normais não geram gráfico nenhum, o relatório fica enxuto.
+    doc.heading('3. Anexo técnico — detalhamento dos circuitos com pendência', 2);
+    if(circuitosComPendencia.length===0){
+      doc.paragraph('Nenhum circuito com pendência nesta pista — sem detalhamento necessário.');
+    } else {
+      circuitosComPendencia.forEach(circ=>{
+        const latest = Object.values(latestByRangeMap(circ)).filter(r=>r.manut==='prev'||r.manut==='corr');
+        const ordered = latest.sort((a,b)=>recordPosition(circ,a)-recordPosition(circ,b));
+        const items = ordered.map(r=>({label: `${r.de}→${r.ate}`, medida: r.medida, situacao: r.situacao}));
+        const barChart = drawBarChartForCircuit(circLabel(circ), items);
+        const osList = [...new Set(ordered.map(r=>r.os))].filter(Boolean).join(', ');
+        doc.image(barChart.dataUrl, barChart.width, barChart.height, [
+          `${circLabel(circ)} — ${items.length} trecho(s) medido(s)`,
+          `OS: ${osList||'—'}`
+        ]);
+
+        const lastIdx = circ.pontos.length-1;
+        const hist = getTrendHistory(circ, 0, lastIdx);
+        if(hist.length>1){
+          const calc = computeRange(circ, 0, lastIdx);
+          const calculada = calc ? calc.calculada : (hist[hist.length-1].calculada||0);
+          const lineChart = drawTrendChartToCanvas(hist, calculada);
+          const osHist = [...new Set(hist.map(r=>r.os))].filter(Boolean).join(', ');
+          doc.image(lineChart.dataUrl, lineChart.width, lineChart.height, [
+            `${circLabel(circ)} — Se-NA → Se-NA, evolução ao longo do tempo`,
+            `OS: ${osHist||'—'}`
+          ]);
+        }
+      });
     }
 
     const bytes = doc.toBytes();
@@ -2665,7 +2752,10 @@ class SimpleDocx {
     this.bodyXml += `<w:p>${jc?`<w:pPr>${jc}</w:pPr>`:''}<w:r><w:rPr>${bold}</w:rPr><w:t xml:space="preserve">${xmlEscape(text)}</w:t></w:r></w:p>`;
   }
 
-  table(headers, rows){
+  // rowHighlights: array opcional de booleans (mesma quantidade de rows) —
+  // true pinta a linha inteira com fundo vermelho claro (trecho/circuito
+  // com pendência), pra bater o olho na tabela sem precisar de gráfico.
+  table(headers, rows, rowHighlights){
     const colWidth = Math.floor(9000/headers.length);
     let xml = `<w:tbl><w:tblPr><w:tblW w:w="9000" w:type="dxa"/><w:tblBorders>` +
       `<w:top w:val="single" w:sz="4" w:color="999999"/><w:left w:val="single" w:sz="4" w:color="999999"/>` +
@@ -2679,10 +2769,13 @@ class SimpleDocx {
       `<w:p><w:r><w:rPr><w:b/><w:sz w:val="18"/></w:rPr><w:t xml:space="preserve">${xmlEscape(h)}</w:t></w:r></w:p></w:tc>`
     ).join('') + `</w:tr>`;
 
-    rows.forEach(row=>{
+    rows.forEach((row, idx)=>{
+      const highlight = rowHighlights && rowHighlights[idx];
+      const shd = highlight ? `<w:shd w:val="clear" w:fill="F8CBAD"/>` : '';
+      const bold = highlight ? '<w:b/>' : '';
       xml += `<w:tr>` + row.map(cell=>
-        `<w:tc><w:tcPr><w:tcW w:w="${colWidth}" w:type="dxa"/></w:tcPr>` +
-        `<w:p><w:r><w:rPr><w:sz w:val="18"/></w:rPr><w:t xml:space="preserve">${xmlEscape(String(cell))}</w:t></w:r></w:p></w:tc>`
+        `<w:tc><w:tcPr><w:tcW w:w="${colWidth}" w:type="dxa"/>${shd}</w:tcPr>` +
+        `<w:p><w:r><w:rPr>${bold}<w:sz w:val="18"/></w:rPr><w:t xml:space="preserve">${xmlEscape(String(cell))}</w:t></w:r></w:p></w:tc>`
       ).join('') + `</w:tr>`;
     });
     xml += `</w:tbl><w:p/>`;
