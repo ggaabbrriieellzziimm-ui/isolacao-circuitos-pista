@@ -313,9 +313,9 @@ button.secondary{width:100%;padding:13px;background:transparent;color:var(--text
 
 /* perfil do circuito (Painel Geral → Todos os circuitos → 📈) */
 .profile-card{background:var(--panel2);border:1px solid var(--border);border-radius:12px;padding:14px;margin-top:14px;}
-.profile-card.corr{border-color:#FF5B94;}
+.profile-card.corr{border-color:#1D9A6C;}
 .profile-tag{font-family:var(--disp);font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:var(--amber);display:block;margin-bottom:10px;}
-.profile-tag.corr{color:#FF5B94;}
+.profile-tag.corr{color:#1D9A6C;}
 .profile-scrollwrap{overflow-x:auto;overflow-y:hidden;border-radius:8px;background:#0F141A;-webkit-overflow-scrolling:touch;}
 .profile-scrollwrap::-webkit-scrollbar{height:6px;}
 .profile-scrollwrap::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px;}
@@ -2501,7 +2501,7 @@ document.getElementById('trendOverlay').addEventListener('click', (e)=>{
 // só nos trechos que ela cobriu).
 // ---------------------------------------------------------------
 const PROFILE_COLORS = ['#4C8DFF', '#B57BEE', '#FF9F5A', '#5AD1C8', '#E8D34C'];
-const CORR_COLORS = ['#FF5B94', '#34D399', '#F97316', '#22D3EE', '#C084FC'];
+const CORR_COLORS = ['#1D9A6C', '#34D399', '#F97316', '#22D3EE', '#C084FC'];
 
 function buildCircuitSegments(circ){
   const segs = [];
@@ -2606,19 +2606,37 @@ function drawProfileChart(canvas, circ, segs, series){
   ctx.stroke();
   ctx.setLineDash([]);
 
-  // cada série (uma cor por OS/ano) — quebra a linha onde não há dado
+  // cada série (uma cor por OS/ano) — quebra a linha onde não há dado.
+  // Quando a série tem cor por ponto (a linha mesclada preventiva+corretiva),
+  // cada TRECHO (não só o ponto) é desenhado na cor de quem o gerou —
+  // corretiva colore o trecho inteiro que ela corrigiu, não só a bolinha.
   series.forEach(serie=>{
-    ctx.strokeStyle = serie.color;
-    ctx.lineWidth = 2.5;
-    let started = false;
-    ctx.beginPath();
-    for(let i=0;i<=segs.length;i++){
-      const v = serie.valuesByI.get(i);
-      if(!v){ started=false; continue; }
-      const x = xFor(i), y = yFor(v.medida);
-      if(!started){ ctx.moveTo(x,y); started=true; } else { ctx.lineTo(x,y); }
+    if(serie.pointColorByI){
+      for(let i=0;i<segs.length;i++){
+        const j=i+1;
+        const vA = serie.valuesByI.get(i), vB = serie.valuesByI.get(j);
+        if(!vA || !vB) continue;
+        const corSegmento = serie.pointColorByI.get(j) || serie.color;
+        ctx.strokeStyle = corSegmento;
+        ctx.lineWidth = 2.5;
+        ctx.beginPath();
+        ctx.moveTo(xFor(i), yFor(vA.medida));
+        ctx.lineTo(xFor(j), yFor(vB.medida));
+        ctx.stroke();
+      }
+    } else {
+      ctx.strokeStyle = serie.color;
+      ctx.lineWidth = 2.5;
+      let started = false;
+      ctx.beginPath();
+      for(let i=0;i<=segs.length;i++){
+        const v = serie.valuesByI.get(i);
+        if(!v){ started=false; continue; }
+        const x = xFor(i), y = yFor(v.medida);
+        if(!started){ ctx.moveTo(x,y); started=true; } else { ctx.lineTo(x,y); }
+      }
+      ctx.stroke();
     }
-    ctx.stroke();
     for(let i=0;i<=segs.length;i++){
       const v = serie.valuesByI.get(i);
       if(!v) continue;
