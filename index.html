@@ -1954,38 +1954,65 @@ async function exportPainelGeralRelatorio(){
       ]);
     }
 
-    // 3) Anexo técnico — detalhamento sob demanda. Só os circuitos COM
-    // PENDÊNCIA ganham gráfico individual aqui (barras por trecho +
-    // evolução ano a ano, se houver histórico do circuito inteiro).
-    // Circuitos normais não geram gráfico nenhum, o relatório fica enxuto.
-    doc.heading('3. Anexo técnico — detalhamento dos circuitos com pendência', 2);
-    if(circuitosComPendencia.length===0){
-      doc.paragraph('Nenhum circuito com pendência nesta pista — sem detalhamento necessário.');
-    } else {
-      circuitosComPendencia.forEach(circ=>{
-        const latest = Object.values(latestByRangeMap(circ)).filter(r=>r.manut==='prev'||r.manut==='corr');
-        const ordered = latest.sort((a,b)=>recordPosition(circ,a)-recordPosition(circ,b));
-        const items = ordered.map(r=>({label: `${r.de}→${r.ate}`, medida: r.medida, situacao: r.situacao}));
-        const barChart = drawBarChartForCircuit(circLabel(circ), items);
-        const osList = [...new Set(ordered.map(r=>r.os))].filter(Boolean).join(', ');
-        doc.image(barChart.dataUrl, barChart.width, barChart.height, [
-          `${circLabel(circ)} — ${items.length} trecho(s) medido(s)`,
-          `OS: ${osList||'—'}`
-        ]);
+    // 3) Perfil por circuito — mesmo formato dos dois gráficos usados no
+    // Painel Geral (📈): Preventiva (todas as OS/anos, cada uma com sua
+    // cor) e Após Corretiva (só aparece quando o circuito realmente tem
+    // OS corretiva registrada).
+    doc.heading('3. Perfil por circuito — Preventiva e Após Corretiva', 2);
+    let anyPerfil = false;
+    circuits.forEach(circ=>{
+      const segs = buildCircuitSegments(circ);
+      const allRecs = loadRecords().filter(r=>r.circId===circ.id && (r.manut==='prev'||r.manut==='corr'));
+      const prevRecs = allRecs.filter(r=>r.manut==='prev' && r.os);
+      const corrRecs = allRecs.filter(r=>r.manut==='corr' && r.os);
+      if(prevRecs.length===0) return; // sem OS preventiva de verdade, pula
 
-        const lastIdx = circ.pontos.length-1;
-        const hist = getTrendHistory(circ, 0, lastIdx);
-        if(hist.length>1){
-          const calc = computeRange(circ, 0, lastIdx);
-          const calculada = calc ? calc.calculada : (hist[hist.length-1].calculada||0);
-          const lineChart = drawTrendChartToCanvas(hist, calculada);
-          const osHist = [...new Set(hist.map(r=>r.os))].filter(Boolean).join(', ');
-          doc.image(lineChart.dataUrl, lineChart.width, lineChart.height, [
-            `${circLabel(circ)} — Se-NA → Se-NA, evolução ao longo do tempo`,
-            `OS: ${osHist||'—'}`
-          ]);
+      const prevGroups = groupRecordsByOsPerSegment(circ, prevRecs, segs);
+      const corrGroups = groupRecordsByOsPerSegment(circ, corrRecs, segs);
+
+      const prevSeries = prevGroups.map((g,idx)=>({
+        color: PROFILE_COLORS[idx % PROFILE_COLORS.length],
+        valuesByI: g.valuesByI,
+        legendLabel: `Preventiva ${new Date(g.ts).getFullYear()} — OS ${g.os}`
+      }));
+      const canvasPrevEl = document.createElement('canvas');
+      drawProfileChart(canvasPrevEl, circ, segs, prevSeries);
+      doc.image(canvasPrevEl.toDataURL('image/jpeg', 0.9), canvasPrevEl.width, canvasPrevEl.height, [
+        `${circLabel(circ)} — Gráfico Preventiva`,
+        prevSeries.map(s=>s.legendLabel).join('  ·  ')
+      ]);
+      anyPerfil = true;
+
+      if(corrGroups.length>0){
+        const baseGroup = prevGroups[prevGroups.length-1];
+        const mergedValuesByI = new Map();
+        for(let i=0;i<=segs.length;i++){
+          let melhorOverride = null;
+          corrGroups.forEach(g=>{
+            const v = g.valuesByI.get(i);
+            if(v && (!melhorOverride || v.ts>melhorOverride.ts)) melhorOverride = v;
+          });
+          const chosen = melhorOverride || baseGroup.valuesByI.get(i);
+          if(chosen) mergedValuesByI.set(i, chosen);
         }
-      });
+        const pointColorByI = new Map();
+        for(let i=0;i<=segs.length;i++){
+          let corTrecho = '#4C8DFF';
+          corrGroups.forEach((g,idx)=>{ if(g.valuesByI.get(i)) corTrecho = CORR_COLORS[idx % CORR_COLORS.length]; });
+          pointColorByI.set(i, corTrecho);
+        }
+        const mergedSeries = {color:'#4C8DFF', valuesByI: mergedValuesByI, pointColorByI};
+        const canvasCorrEl = document.createElement('canvas');
+        drawProfileChart(canvasCorrEl, circ, segs, [mergedSeries]);
+        const corrLegend = corrGroups.map((g,idx)=>`Corretiva ${new Date(g.ts).getFullYear()} — OS ${g.os}`).join('  ·  ');
+        doc.image(canvasCorrEl.toDataURL('image/jpeg', 0.9), canvasCorrEl.width, canvasCorrEl.height, [
+          `${circLabel(circ)} — Gráfico Após Corretiva`,
+          corrLegend
+        ]);
+      }
+    });
+    if(!anyPerfil){
+      doc.paragraph('Nenhum circuito com OS preventiva registrada ainda nesta pista.');
     }
 
     const bytes = doc.toBytes();
@@ -2982,7 +3009,7 @@ function buildStyledXlsxForCircuit(circ){
   const CELL_STYLE_PLAIN = { border:true, borderColor:'808080', align:{h:'center', v:'center'} };
   const CELL_STYLE_NUM2 = { border:true, borderColor:'808080', align:{h:'center', v:'center'}, numFmt:'0.00' };
   const CELL_STYLE_NUM2_BOLD = { bold:true, border:true, borderColor:'808080', align:{h:'center', v:'center'}, numFmt:'0.00' };
-  const CELL_STYLE_FALHA_FILL = 'FFF8CBAD'; // vermelho/salmão claro — trecho com potencial de falha
+  const CELL_STYLE_FALHA_FILL = 'FFFF8C78'; // vermelho claro — trecho com potencial de falha
   const CELL_STYLE_PLAIN_FALHA = { border:true, borderColor:'808080', align:{h:'center', v:'center'}, fill:CELL_STYLE_FALHA_FILL };
   const CELL_STYLE_PCT_FALHA = { border:true, borderColor:'808080', align:{h:'center', v:'center'}, fill:CELL_STYLE_FALHA_FILL, numFmt:'0.0%' };
 
