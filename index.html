@@ -310,6 +310,20 @@ button.secondary{width:100%;padding:13px;background:transparent;color:var(--text
 .trend-close{background:none;border:none;color:var(--muted);font-size:22px;padding:4px 8px;cursor:pointer;}
 .trend-sub{font-family:var(--mono);font-size:11px;color:var(--muted);margin-bottom:14px;}
 .trend-chart-wrap{background:var(--panel2);border-radius:10px;padding:10px;margin-bottom:14px;}
+
+/* perfil do circuito (Painel Geral → Todos os circuitos → 📈) */
+.profile-card{background:var(--panel2);border:1px solid var(--border);border-radius:12px;padding:14px;margin-top:14px;}
+.profile-card.corr{border-color:#FF5B94;}
+.profile-tag{font-family:var(--disp);font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:var(--amber);display:block;margin-bottom:10px;}
+.profile-tag.corr{color:#FF5B94;}
+.profile-scrollwrap{overflow-x:auto;overflow-y:hidden;border-radius:8px;background:#0F141A;-webkit-overflow-scrolling:touch;}
+.profile-scrollwrap::-webkit-scrollbar{height:6px;}
+.profile-scrollwrap::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px;}
+.profile-scroll-hint{font-size:10.5px;color:var(--muted);text-align:center;margin-top:5px;}
+.profile-legend{margin-top:10px;display:flex;flex-direction:column;gap:6px;}
+.profile-legend .legend-item{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--text);}
+.profile-legend .legend-line{width:20px;height:0;border-top-width:3px;border-top-style:solid;flex-shrink:0;}
+.profile-legend .legend-line.dashed{border-top-style:dashed;}
 .trend-row{display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--border);
   font-family:var(--mono);font-size:12px;}
 .trend-row:last-child{border-bottom:none;}
@@ -362,6 +376,7 @@ button.secondary{width:100%;padding:13px;background:transparent;color:var(--text
 <div class="trend-overlay" id="trendOverlay">
   <div class="trend-panel" id="trendPanel"></div>
 </div>
+<div id="trendTooltip" style="position:fixed; display:none; background:#1A2028; border:1px solid #2A323C; border-radius:8px; padding:10px 12px; font-size:12.5px; pointer-events:none; z-index:400; color:#EDEDED;"></div>
 
 <script>
 if('serviceWorker' in navigator){
@@ -1143,15 +1158,13 @@ function renderPainelGeral(){
   document.getElementById('pgModePrev').onclick = ()=>{ pgMode='prev'; renderPainelGeral(); };
   document.getElementById('pgModeCorr').onclick = ()=>{ pgMode='corr'; renderPainelGeral(); };
   document.getElementById('pgExportBtn').onclick = exportPainelGeralRelatorio;
-  // Ícone de gráfico abre o histórico do circuito inteiro (Se-NA ao fim da
-  // cadeia) — só leitura, sem editar nada aqui no Painel Geral.
+  // Ícone de gráfico abre o PERFIL do circuito inteiro (dois gráficos:
+  // Preventiva e Após Corretiva) — só leitura, sem editar nada aqui.
   el.querySelectorAll('.pg-trend-btn').forEach(btn=>{
     btn.onclick = ()=>{
       const pista = btn.dataset.pista;
       const circ = CIRCUIT_DATA[pista].find(c=>c.id===btn.dataset.circid);
-      const hist = getTrendHistory(circ, 0, circ.pontos.length-1);
-      if(hist.length===0){ showToast('Ainda não há medições do circuito inteiro (Se-NA ao fim) pra mostrar aqui.'); return; }
-      openTrendPanel(circ, 0, circ.pontos.length-1);
+      openCircuitProfileModal(circ);
     };
   });
 }
@@ -2480,6 +2493,261 @@ function openTrendPanel(circ, deIdx, ateIdx){
 document.getElementById('trendOverlay').addEventListener('click', (e)=>{
   if(e.target.id==='trendOverlay') document.getElementById('trendOverlay').classList.remove('show');
 });
+
+// ---------------------------------------------------------------
+// PERFIL DO CIRCUITO (Painel Geral → Todos os circuitos → ícone 📈)
+// Dois gráficos: Preventiva (todas as OS/anos, cada um com sua cor) e
+// Após Corretiva (estado atual + cada OS corretiva com sua própria cor,
+// só nos trechos que ela cobriu).
+// ---------------------------------------------------------------
+const PROFILE_COLORS = ['#4C8DFF', '#B57BEE', '#FF9F5A', '#5AD1C8', '#E8D34C'];
+const CORR_COLORS = ['#FF5B94', '#34D399', '#F97316', '#22D3EE', '#C084FC'];
+
+function buildCircuitSegments(circ){
+  const segs = [];
+  for(let i=1;i<circ.pontos.length;i++){
+    const calc = computeRange(circ, i-1, i);
+    segs.push({i, deLabel: circ.pontos[i-1].label, ateLabel: circ.pontos[i].label, minimo: calc?calc.calculada:0});
+  }
+  return segs;
+}
+
+// Agrupa registros de um circuito por OS (registros sem OS caem juntos em
+// um grupo "histórico anterior"), cada grupo com seus valores por segmento.
+function groupRecordsByOsPerSegment(circ, recs, segs){
+  const groups = {}; // os -> {os, ts, valuesByI: Map}
+  recs.forEach(r=>{
+    const key = r.os || '—';
+    if(!groups[key]) groups[key] = {os: key, ts: r.ts, valuesByI: new Map()};
+    if(r.ts < groups[key].ts) groups[key].ts = r.ts;
+    const seg = segs.find(s=>groupKeyFor(circ,r)===(s.i-1)+'|'+s.i);
+    if(seg){
+      const existing = groups[key].valuesByI.get(seg.i);
+      if(!existing || r.ts>existing.ts) groups[key].valuesByI.set(seg.i, {medida:r.medida, situacao:r.situacao, ts:r.ts});
+    }
+  });
+  return Object.values(groups).sort((a,b)=>a.ts-b.ts);
+}
+
+function niceStepProfile(maxV, targetLines){
+  const raw = maxV/targetLines;
+  const mag = Math.pow(10, Math.floor(Math.log10(raw||1)));
+  const norm = raw/mag;
+  let step;
+  if(norm<1.5) step=1; else if(norm<3.5) step=2; else if(norm<7.5) step=5; else step=10;
+  return step*mag;
+}
+
+// series: [{color, valuesByI: Map(i->{medida,situacao})}], desenha cada uma
+// só onde tem dado (linha quebra nos buracos), sem número de OS no
+// desenho — isso fica só na legenda, fora do canvas.
+function drawProfileChart(canvas, circ, segs, series){
+  const PX_PER_POINT = 90;
+  const padL = 60, padR = 30, padT = 24, padB = 40;
+  const H = 300;
+  const nPoints = segs.length+1; // pontos = segmentos + 1 (inclui a origem)
+  const plotW = nPoints * PX_PER_POINT;
+  const W = plotW + padL + padR;
+  const plotH = H - padT - padB;
+
+  canvas.width = W; canvas.height = H;
+  canvas.style.width = W+'px'; canvas.style.height = H+'px';
+  const ctx = canvas.getContext('2d');
+
+  const xFor = i => padL + i*PX_PER_POINT + PX_PER_POINT/2;
+  const allVals = [];
+  segs.forEach(s=>allVals.push(s.minimo));
+  series.forEach(s=>s.valuesByI.forEach(v=>allVals.push(v.medida)));
+  const maxV = (allVals.length ? Math.max(...allVals) : 10) * 1.15;
+  const yFor = v => padT + plotH - (v/maxV)*plotH;
+
+  ctx.fillStyle = '#0F141A';
+  ctx.fillRect(0,0,W,H);
+
+  const step = niceStepProfile(maxV, 5);
+  ctx.font = '10.5px monospace';
+  ctx.textAlign = 'right';
+  for(let v=0; v<=maxV; v+=step){
+    const y = yFor(v);
+    ctx.strokeStyle = 'rgba(255,255,255,0.08)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(padL, y); ctx.lineTo(W-padR, y);
+    ctx.stroke();
+    ctx.fillStyle = '#6b7480';
+    ctx.fillText(v>=1000 ? (v/1000).toFixed(1)+'k' : Math.round(v), padL-8, y+3);
+  }
+
+  ctx.strokeStyle = '#5a6270';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(padL, padT); ctx.lineTo(padL, H-padB); ctx.lineTo(W-padR, H-padB);
+  ctx.stroke();
+
+  ctx.save();
+  ctx.translate(14, padT + plotH/2);
+  ctx.rotate(-Math.PI/2);
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#8A93A0';
+  ctx.font = '10.5px monospace';
+  ctx.fillText('Isolação (MΩ)', 0, 0);
+  ctx.restore();
+
+  // mínimo admissível, em degraus (0 é a origem sem trecho anterior)
+  ctx.strokeStyle = '#F5A623';
+  ctx.setLineDash([5,4]);
+  ctx.lineWidth = 1.3;
+  ctx.beginPath();
+  segs.forEach((s,idx)=>{
+    const x0 = xFor(s.i-1), x1 = xFor(s.i), y = yFor(s.minimo);
+    if(idx===0) ctx.moveTo(x0,y);
+    ctx.lineTo(x1,y);
+  });
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  // cada série (uma cor por OS/ano) — quebra a linha onde não há dado
+  series.forEach(serie=>{
+    ctx.strokeStyle = serie.color;
+    ctx.lineWidth = 2.5;
+    let started = false;
+    ctx.beginPath();
+    for(let i=0;i<=segs.length;i++){
+      const v = serie.valuesByI.get(i);
+      if(!v){ started=false; continue; }
+      const x = xFor(i), y = yFor(v.medida);
+      if(!started){ ctx.moveTo(x,y); started=true; } else { ctx.lineTo(x,y); }
+    }
+    ctx.stroke();
+    for(let i=0;i<=segs.length;i++){
+      const v = serie.valuesByI.get(i);
+      if(!v) continue;
+      const x = xFor(i), y = yFor(v.medida);
+      const seg = segs.find(s=>s.i===i);
+      const emFalha = seg && v.medida < seg.minimo;
+      ctx.fillStyle = serie.pontoCor || (emFalha ? '#D8392F' : serie.color);
+      ctx.beginPath();
+      ctx.arc(x, y, 5.5, 0, Math.PI*2);
+      ctx.fill();
+      ctx.strokeStyle = '#0A0E12'; ctx.lineWidth = 1.5; ctx.stroke();
+    }
+  });
+
+  // rótulos eixo X (SNA, 1001, 1010...)
+  ctx.fillStyle = '#8A93A0';
+  ctx.font = '11px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText(circ.pontos[0].label, xFor(0), H-padB+18);
+  segs.forEach(s=>{ ctx.fillText(s.ateLabel, xFor(s.i), H-padB+18); });
+
+  return xFor;
+}
+
+function wireProfileTooltip(canvas, xFor, circ, segs, series){
+  const tooltip = document.getElementById('trendTooltip');
+  function show(clientX, clientY){
+    const rect = canvas.getBoundingClientRect();
+    const mx = clientX - rect.left;
+    let closestI = null, minDist = 999;
+    for(let i=0;i<=segs.length;i++){
+      const d = Math.abs(xFor(i)-mx);
+      if(d<minDist){ minDist=d; closestI=i; }
+    }
+    if(closestI==null || minDist>=30){ tooltip.style.display='none'; return; }
+    const label = closestI===0 ? circ.pontos[0].label : segs.find(s=>s.i===closestI).ateLabel;
+    const linhas = series.map(serie=>{
+      const v = serie.valuesByI.get(closestI);
+      if(!v) return null;
+      return `<span style="color:${serie.color}">${serie.legendLabel}: ${v.medida} MΩ</span>`;
+    }).filter(Boolean);
+    if(linhas.length===0){ tooltip.style.display='none'; return; }
+    const seg = segs.find(s=>s.i===closestI);
+    tooltip.innerHTML = `<b>${label}</b><br>${linhas.join('<br>')}` + (seg?`<br>Mínimo: ${seg.minimo.toFixed(1)} MΩ`:'');
+    tooltip.style.display = 'block';
+    tooltip.style.left = (clientX+14)+'px';
+    tooltip.style.top = (clientY+14)+'px';
+  }
+  canvas.addEventListener('mousemove', e=>show(e.clientX, e.clientY));
+  canvas.addEventListener('mouseleave', ()=>{ tooltip.style.display='none'; });
+  canvas.addEventListener('touchstart', e=>{ const t=e.touches[0]; show(t.clientX, t.clientY); });
+}
+
+function openCircuitProfileModal(circ){
+  const segs = buildCircuitSegments(circ);
+  const allRecs = loadRecords().filter(r=>r.circId===circ.id && (r.manut==='prev'||r.manut==='corr'));
+  const prevRecs = allRecs.filter(r=>r.manut==='prev');
+  const corrRecs = allRecs.filter(r=>r.manut==='corr');
+
+  if(prevRecs.length===0){
+    showToast('Ainda não há medições preventivas registradas pra esse circuito.');
+    return;
+  }
+
+  const prevGroups = groupRecordsByOsPerSegment(circ, prevRecs, segs);
+  const corrGroups = groupRecordsByOsPerSegment(circ, corrRecs, segs);
+
+  const prevSeries = prevGroups.map((g,idx)=>({
+    color: PROFILE_COLORS[idx % PROFILE_COLORS.length],
+    valuesByI: g.valuesByI,
+    legendLabel: `Preventiva ${new Date(g.ts).getFullYear()} — OS ${g.os}`
+  }));
+
+  // "Após corretiva": parte da preventiva mais recente como base, e cada
+  // OS corretiva entra por cima, só nos trechos que ela cobriu, com sua
+  // própria cor e identificação de ano.
+  const baseGroup = prevGroups[prevGroups.length-1];
+  const baseSeries = {
+    color: '#4C8DFF',
+    valuesByI: baseGroup.valuesByI,
+    legendLabel: `Preventiva ${new Date(baseGroup.ts).getFullYear()} — OS ${baseGroup.os} (base)`
+  };
+  const corrSeries = corrGroups.map((g,idx)=>({
+    color: CORR_COLORS[idx % CORR_COLORS.length],
+    valuesByI: g.valuesByI,
+    legendLabel: `Corretiva ${new Date(g.ts).getFullYear()} — OS ${g.os}`
+  }));
+
+  const legendHtml = (series)=>series.map(s=>`
+    <div class="legend-item"><span class="legend-line" style="border-color:${s.color};"></span><span>${s.legendLabel}</span></div>
+  `).join('') + `<div class="legend-item"><span class="legend-line dashed" style="border-color:var(--amber);"></span><span>Mínimo admissível (varia por trecho)</span></div>`;
+
+  document.getElementById('trendPanel').innerHTML = `
+    <div class="trend-header">
+      <div class="trend-title">${circLabel(circ)}</div>
+      <button class="trend-close" id="trendCloseBtn">✕</button>
+    </div>
+
+    <div class="profile-card">
+      <span class="profile-tag prev">📋 Gráfico Preventiva</span>
+      <div class="profile-scrollwrap"><canvas id="profileChartPrev"></canvas></div>
+      <div class="profile-scroll-hint">↔ arraste pro lado</div>
+      <div class="profile-legend">${legendHtml(prevSeries)}</div>
+    </div>
+
+    ${corrSeries.length>0 ? `
+    <div class="profile-card corr">
+      <span class="profile-tag corr">✅ Gráfico Após Corretiva</span>
+      <div class="profile-scrollwrap"><canvas id="profileChartCorr"></canvas></div>
+      <div class="profile-scroll-hint">↔ arraste pro lado</div>
+      <div class="profile-legend">${legendHtml([baseSeries, ...corrSeries])}</div>
+    </div>` : `<div class="pg-empty" style="margin-top:14px;">Sem corretivas registradas ainda neste circuito.</div>`}
+  `;
+
+  document.getElementById('trendOverlay').classList.add('show');
+  document.getElementById('trendCloseBtn').onclick = ()=>{
+    document.getElementById('trendOverlay').classList.remove('show');
+  };
+
+  const canvasPrev = document.getElementById('profileChartPrev');
+  const xForPrev = drawProfileChart(canvasPrev, circ, segs, prevSeries);
+  wireProfileTooltip(canvasPrev, xForPrev, circ, segs, prevSeries);
+
+  if(corrSeries.length>0){
+    const canvasCorr = document.getElementById('profileChartCorr');
+    const xForCorr = drawProfileChart(canvasCorr, circ, segs, [baseSeries, ...corrSeries]);
+    wireProfileTooltip(canvasCorr, xForCorr, circ, segs, [baseSeries, ...corrSeries]);
+  }
+}
 
 function renderHistory(){
   const histList = document.getElementById('histList');
