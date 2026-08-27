@@ -332,7 +332,17 @@ button.secondary.danger{color:#ff8a82;border-color:#e5484d;}
 .trend-row .badge.ok{background:var(--green-dim);color:var(--green);}
 .trend-row .badge.alert{background:var(--red-dim);color:#ff8a82;}
 .trend-hint{font-size:11px;color:var(--muted);margin-top:4px;text-align:center;}
+
+/* sincronização */
+.sync-badge{display:block;width:100%;margin-top:8px;padding:9px;border-radius:10px;border:1px solid var(--border);
+  background:var(--panel);color:var(--muted);font-family:var(--disp);font-size:11.5px;letter-spacing:.02em;
+  text-transform:uppercase;cursor:pointer;text-align:center;}
+.sync-badge.on{border-color:var(--green);color:var(--green);}
+.sync-badge.connecting{border-color:var(--amber);color:var(--amber);}
+.sync-badge.error{border-color:#e5484d;color:#ff8a82;}
 </style>
+<script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-database-compat.js"></script>
 </head>
 <body>
 
@@ -348,6 +358,7 @@ button.secondary.danger{color:#ff8a82;border-color:#e5484d;}
     <div class="mode-btn" data-m="corr" id="modeBtnCorr">⚠ Corretiva</div>
   </div>
   <button class="panel-geral-btn" id="painelGeralBtn">📊 Painel geral das pistas</button>
+  <button class="sync-badge off" id="syncBadge" title="Toque pra configurar sincronização com a equipe">☁ Sincronização desligada</button>
   <div class="backup-row">
     <button class="backup-btn" id="backupExportBtn">💾 Exportar backup</button>
     <button class="backup-btn" id="backupRestoreBtn">📂 Restaurar backup</button>
@@ -792,6 +803,102 @@ let currentPista = Object.keys(CIRCUIT_DATA)[0];
 let appMode = 'prev'; // 'prev' | 'corr' — menu ativo no momento
 let currentCircuit = null; // circuit object when in detail view
 const STORAGE_KEY = 'rgl_isolacao_registros_v1';
+
+// ---------------------------------------------------------------
+// SINCRONIZAÇÃO ENTRE CELULARES (Firebase Realtime Database)
+// Cada registro salvo vira uma entrada em /isolacao/<código-da-equipe>/records/<id>.
+// Todo celular com o mesmo "código da equipe" vê as mesmas medições, quase
+// em tempo real. Sem internet, o app continua funcionando normal, só local.
+// ---------------------------------------------------------------
+const FIREBASE_CONFIG = {
+  apiKey: "AIzaSyD0emqeyDL-3FiwpOjs7NUBp3EWwPP4D9E",
+  authDomain: "balizamento.firebaseapp.com",
+  databaseURL: "https://balizamento-default-rtdb.firebaseio.com",
+  projectId: "balizamento",
+  storageBucket: "balizamento.firebasestorage.app",
+  messagingSenderId: "842642303169",
+  appId: "1:842642303169:web:5a3b4710028d678e408c40",
+  measurementId: "G-HGRSF0DH7V"
+};
+const SYNC_CODE_KEY = 'rgl_isolacao_sync_code_v1';
+let fbRecordsRef = null;
+let syncStatus = 'off'; // 'off' | 'connecting' | 'on' | 'error'
+
+function getSyncCode(){
+  return localStorage.getItem(SYNC_CODE_KEY) || '';
+}
+function setSyncCode(code){
+  localStorage.setItem(SYNC_CODE_KEY, code);
+}
+
+function initFirebaseSync(){
+  const code = getSyncCode();
+  if(!code){ syncStatus = 'off'; return; }
+  try{
+    if(!firebase.apps || firebase.apps.length===0){ firebase.initializeApp(FIREBASE_CONFIG); }
+    syncStatus = 'connecting';
+    updateSyncBadge();
+    const safeCode = code.trim().toLowerCase().replace(/[^a-z0-9\-_]/g,'');
+    fbRecordsRef = firebase.database().ref('isolacao/'+safeCode+'/records');
+    fbRecordsRef.on('value', snap=>{
+      syncStatus = 'on';
+      updateSyncBadge();
+      const val = snap.val() || {};
+      const recs = Object.values(val);
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(recs));
+      // atualiza a tela que estiver visível, sem perder o que o técnico
+      // estiver digitando em campos de texto (medida/OS) no momento.
+      const detailShowing = document.getElementById('detail').classList.contains('show');
+      if(!detailShowing){ renderList(); }
+      const painelShowing = document.getElementById('painelGeral').classList.contains('show');
+      if(painelShowing){ renderPainelGeral(); }
+    }, err=>{
+      console.warn('Sincronização falhou:', err);
+      syncStatus = 'error';
+      updateSyncBadge();
+    });
+  }catch(e){
+    console.warn('Falha ao iniciar sincronização:', e);
+    syncStatus = 'error';
+    updateSyncBadge();
+  }
+}
+
+function pushRecordToCloud(record){
+  if(!fbRecordsRef || !record || !record.id) return;
+  fbRecordsRef.child(record.id).set(record).catch(e=>console.warn('Falha ao sincronizar registro:', e));
+}
+function pushDeleteToCloud(id){
+  if(!fbRecordsRef || !id) return;
+  fbRecordsRef.child(id).remove().catch(e=>console.warn('Falha ao sincronizar exclusão:', e));
+}
+
+function updateSyncBadge(){
+  const el = document.getElementById('syncBadge');
+  if(!el) return;
+  const map = {
+    off: {txt:'☁ Sincronização desligada', cls:'off'},
+    connecting: {txt:'☁ Conectando…', cls:'connecting'},
+    on: {txt:'☁ Sincronizado com a equipe', cls:'on'},
+    error: {txt:'☁ Falha ao sincronizar', cls:'error'},
+  };
+  const s = map[syncStatus] || map.off;
+  el.textContent = s.txt;
+  el.className = 'sync-badge ' + s.cls;
+}
+
+function promptSyncCode(){
+  const atual = getSyncCode();
+  const novo = prompt('Código da equipe (o MESMO em todos os celulares que devem sincronizar juntos):', atual || '');
+  if(novo===null) return; // cancelou
+  const limpo = novo.trim();
+  if(!limpo){ showToast('Código vazio — sincronização desligada.'); setSyncCode(''); if(fbRecordsRef){ fbRecordsRef.off(); fbRecordsRef=null; } syncStatus='off'; updateSyncBadge(); return; }
+  setSyncCode(limpo);
+  if(fbRecordsRef){ fbRecordsRef.off(); fbRecordsRef=null; }
+  initFirebaseSync();
+  showToast('Sincronização configurada com o código "'+limpo+'".');
+}
+
 const OS_MAP_KEY = 'rgl_isolacao_os_map_v1'; // {circId: última OS usada} — lembrete na tela, não pré-preenche.
 function loadOsMap(){
   try{ return JSON.parse(localStorage.getItem(OS_MAP_KEY)) || {}; }catch(e){ return {}; }
@@ -944,6 +1051,7 @@ function restoreBackupJSON(file){
       });
       const merged = Object.values(byId);
       saveRecords(merged);
+      incoming.forEach(r=>{ if(r && r.id) pushRecordToCloud(r); });
       showToast(`Backup restaurado: ${added} novo(s), ${updated} atualizado(s).`);
       if(typeof render === 'function') render();
     }catch(e){
@@ -1193,6 +1301,8 @@ document.getElementById('painelGeralBtn').onclick = ()=>{
   history.pushState({view:'painel'}, '');
   renderPainelGeral();
 };
+
+document.getElementById('syncBadge').onclick = promptSyncCode;
 
 // Botão/gesto "voltar" do celular: se qualquer tela interna estiver aberta
 // (Painel Geral, Preventiva ou Corretiva), fecha ela e volta pra lista de
@@ -1458,7 +1568,7 @@ function renderCorretivaDetail(){
       if(!calc){ showToast('Não consegui calcular esse trecho.'); return; }
       const situacao = medida >= calc.calculada ? 'NORMAL' : 'FALHA';
       const recs = loadRecords();
-      recs.push({
+      const novoRegistro = {
         id: 'r'+Date.now()+Math.random().toString(36).slice(2,7),
         circId: circ.id, pista: currentPista, tipo: circ.tipo, circuito: circ.nome, tensao: circ.tensao,
         de: circ.pontos[calc.i].label, ate: circ.pontos[calc.j].label, deIdx: calc.i, ateIdx: calc.j,
@@ -1469,8 +1579,10 @@ function renderCorretivaDetail(){
         foto: pendingFoto ? {dataUrl: pendingFoto.dataUrl, width: pendingFoto.width, height: pendingFoto.height} : null,
         lat: pendingGeo ? pendingGeo.lat : null,
         lng: pendingGeo ? pendingGeo.lng : null,
-      });
+      };
+      recs.push(novoRegistro);
       saveRecords(recs);
+      pushRecordToCloud(novoRegistro);
       saveLastOsForCircuit(circ.id, currentCorrOS);
       showToast(situacao==='NORMAL' ? 'Salvo — trecho corrigido, agora NORMAL.' : 'Salvo — ainda em FALHA.');
       renderCorretivaDetail();
@@ -2172,6 +2284,7 @@ function resetCircuitData(circ, onDone){
   if(!ok2) return;
   const restantes = recs.filter(r=>r.circId!==circ.id);
   saveRecords(restantes);
+  doCircuito.forEach(r=>pushDeleteToCloud(r.id));
   const osMap = loadOsMap();
   delete osMap[circ.id];
   localStorage.setItem(OS_MAP_KEY, JSON.stringify(osMap));
@@ -2430,7 +2543,7 @@ function saveMeasurement(){
   const recs = loadRecords();
   const deLabel = currentCircuit.pontos[calc.i].label;
   const ateLabel = currentCircuit.pontos[calc.j].label;
-  recs.push({
+  const novoRegistro = {
     id: 'r'+Date.now()+Math.random().toString(36).slice(2,7),
     circId: currentCircuit.id,
     pista: currentPista,
@@ -2447,8 +2560,10 @@ function saveMeasurement(){
     foto: pendingFoto ? {dataUrl: pendingFoto.dataUrl, width: pendingFoto.width, height: pendingFoto.height} : null,
     lat: pendingGeo ? pendingGeo.lat : null,
     lng: pendingGeo ? pendingGeo.lng : null,
-  });
+  };
+  recs.push(novoRegistro);
   saveRecords(recs);
+  pushRecordToCloud(novoRegistro);
   saveLastOsForCircuit(currentCircuit.id, currentOS);
   showToast(situacao==='NORMAL' ? 'Salvo — trecho NORMAL.' : 'Salvo — TRECHO COM POTENCIAL DE FALHA.');
   pendingFoto = null;
@@ -2952,6 +3067,7 @@ function renderHistory(){
       let recs = loadRecords();
       recs = recs.filter(r=>r.id!==btn.dataset.id);
       saveRecords(recs);
+      pushDeleteToCloud(btn.dataset.id);
       renderHistory(); renderList();
     };
   });
@@ -3577,6 +3693,8 @@ function render(){
   renderList();
 }
 render();
+initFirebaseSync();
+updateSyncBadge();
 </script>
 </body>
 </html>
