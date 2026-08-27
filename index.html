@@ -2625,7 +2625,8 @@ function drawProfileChart(canvas, circ, segs, series){
       const x = xFor(i), y = yFor(v.medida);
       const seg = segs.find(s=>s.i===i);
       const emFalha = seg && v.medida < seg.minimo;
-      ctx.fillStyle = serie.pontoCor || (emFalha ? '#D8392F' : serie.color);
+      const corPonto = (serie.pointColorByI && serie.pointColorByI.get(i)) || serie.pontoCor || (emFalha ? '#D8392F' : serie.color);
+      ctx.fillStyle = corPonto;
       ctx.beginPath();
       ctx.arc(x, y, 5.5, 0, Math.PI*2);
       ctx.fill();
@@ -2675,11 +2676,14 @@ function wireProfileTooltip(canvas, xFor, circ, segs, series){
 function openCircuitProfileModal(circ){
   const segs = buildCircuitSegments(circ);
   const allRecs = loadRecords().filter(r=>r.circId===circ.id && (r.manut==='prev'||r.manut==='corr'));
-  const prevRecs = allRecs.filter(r=>r.manut==='prev');
-  const corrRecs = allRecs.filter(r=>r.manut==='corr');
+  // Só entram registros com OS de verdade — dados antigos (de antes da OS
+  // existir) ficam de fora desse gráfico, pra não misturar linha sem OS
+  // com linha de OS real.
+  const prevRecs = allRecs.filter(r=>r.manut==='prev' && r.os);
+  const corrRecs = allRecs.filter(r=>r.manut==='corr' && r.os);
 
   if(prevRecs.length===0){
-    showToast('Ainda não há medições preventivas registradas pra esse circuito.');
+    showToast('Ainda não há medições preventivas com OS registradas pra esse circuito.');
     return;
   }
 
@@ -2692,9 +2696,9 @@ function openCircuitProfileModal(circ){
     legendLabel: `Preventiva ${new Date(g.ts).getFullYear()} — OS ${g.os}`
   }));
 
-  // "Após corretiva": parte da preventiva mais recente como base, e cada
-  // OS corretiva entra por cima, só nos trechos que ela cobriu, com sua
-  // própria cor e identificação de ano.
+  // "Após corretiva": UMA linha só, contínua — usa o valor da preventiva
+  // mais recente em todo ponto, e troca pelo valor da corretiva só nos
+  // pontos que ela cobriu (a cor do PONTO muda, a linha não quebra).
   const baseGroup = prevGroups[prevGroups.length-1];
   const baseSeries = {
     color: '#4C8DFF',
@@ -2706,6 +2710,31 @@ function openCircuitProfileModal(circ){
     valuesByI: g.valuesByI,
     legendLabel: `Corretiva ${new Date(g.ts).getFullYear()} — OS ${g.os}`
   }));
+
+  // monta a linha mesclada: corretiva tem prioridade onde existir (a mais
+  // recente, se mais de uma corretiva tiver mexido no mesmo trecho),
+  // senão usa a base da preventiva.
+  const mergedValuesByI = new Map();
+  const mergedPointColor = new Map();
+  for(let i=0;i<=segs.length;i++){
+    let melhorOverride = null;
+    corrGroups.forEach((g,idx)=>{
+      const v = g.valuesByI.get(i);
+      if(v && (!melhorOverride || v.ts>melhorOverride.ts)){ melhorOverride = {...v, cor: CORR_COLORS[idx % CORR_COLORS.length]}; }
+    });
+    if(melhorOverride){
+      mergedValuesByI.set(i, melhorOverride);
+      mergedPointColor.set(i, melhorOverride.cor);
+    } else {
+      const baseV = baseGroup.valuesByI.get(i);
+      if(baseV){ mergedValuesByI.set(i, baseV); mergedPointColor.set(i, '#4C8DFF'); }
+    }
+  }
+  const mergedSeries = {
+    color: '#4C8DFF', // cor da LINHA (o que muda de fato é a cor dos pontos)
+    valuesByI: mergedValuesByI,
+    pointColorByI: mergedPointColor,
+  };
 
   const legendHtml = (series)=>series.map(s=>`
     <div class="legend-item"><span class="legend-line" style="border-color:${s.color};"></span><span>${s.legendLabel}</span></div>
@@ -2744,7 +2773,7 @@ function openCircuitProfileModal(circ){
 
   if(corrSeries.length>0){
     const canvasCorr = document.getElementById('profileChartCorr');
-    const xForCorr = drawProfileChart(canvasCorr, circ, segs, [baseSeries, ...corrSeries]);
+    const xForCorr = drawProfileChart(canvasCorr, circ, segs, [mergedSeries]);
     wireProfileTooltip(canvasCorr, xForCorr, circ, segs, [baseSeries, ...corrSeries]);
   }
 }
