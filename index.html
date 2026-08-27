@@ -1119,7 +1119,7 @@ function renderPainelGeral(){
   let lastSide = null;
   const listaHtml = listaFonte.length ? listaFonte.map(x=>{
     const detected = sideLabelFor(x.circ.nome, sideA, sideB);
-    const effectiveSide = detected || lastSide || sideA;
+    const effectiveSide = detected || lastSide || 'SE-NA';
     let dividerHtml = '';
     if(effectiveSide !== lastSide){
       dividerHtml = `<div class="side-divider">Início ${effectiveSide}</div>`;
@@ -1233,7 +1233,7 @@ function appendWithSideDividers(clist, circuits, buildCardFn){
   let lastSide = null;
   circuits.forEach(c=>{
     const detected = sideLabelFor(c.nome, sideA, sideB);
-    const effectiveSide = detected || lastSide || sideA;
+    const effectiveSide = detected || lastSide || 'SE-NA';
     if(effectiveSide !== lastSide){
       const divider = document.createElement('div');
       divider.className = 'side-divider';
@@ -2774,6 +2774,11 @@ function wireProfileTooltip(canvas, xFor, circ, segs, series){
   canvas.addEventListener('mousemove', e=>show(e.clientX, e.clientY));
   canvas.addEventListener('mouseleave', ()=>{ tooltip.style.display='none'; });
   canvas.addEventListener('touchstart', e=>{ const t=e.touches[0]; show(t.clientX, t.clientY); });
+  // Sem isso, o tooltip fica preso na tela pra sempre depois de tocar num
+  // ponto — toque em qualquer outro lugar (fora do gráfico) esconde ele.
+  document.addEventListener('touchstart', (e)=>{
+    if(!canvas.contains(e.target)) tooltip.style.display='none';
+  }, {passive:true});
 }
 
 function openCircuitProfileModal(circ){
@@ -2868,6 +2873,7 @@ function openCircuitProfileModal(circ){
   document.getElementById('trendOverlay').classList.add('show');
   document.getElementById('trendCloseBtn').onclick = ()=>{
     document.getElementById('trendOverlay').classList.remove('show');
+    document.getElementById('trendTooltip').style.display = 'none';
   };
 
   const canvasPrev = document.getElementById('profileChartPrev');
@@ -3432,7 +3438,7 @@ async function exportCircuit(){
   const recs = loadRecords().filter(r=>r.circId===circ.id && r.os===activeExportOS);
   if(recs.length===0){ showToast('Nenhum registro para exportar ainda.'); return; }
   const text = buildTextSummary(circ);
-  const xlsxFilename = circLabel(circ).replace(/\s+/g,'_') + '.xlsx';
+  const xlsxFilename = `${circLabel(circ)}-PPD_${currentPista.replace(/\//g,'-')}`.replace(/\s+/g,'_') + '.xlsx';
 
   // 1) MONTAGEM do arquivo .xlsx (só isso — sem compartilhar ainda). Se
   // quebrar aqui, é problema no gerador embutido, mostramos o erro fixo.
@@ -3511,7 +3517,7 @@ async function exportDocxCircuit(){
     return;
   }
 
-  const docxFilename = circLabel(circ).replace(/\s+/g,'_') + '_relatorio.docx';
+  const docxFilename = `${circLabel(circ)}-PPD_${currentPista.replace(/\//g,'-')}`.replace(/\s+/g,'_') + '_relatorio.docx';
   let compartilhado = false;
   try{
     const file = new File([docxBlob], docxFilename, {type: docxBlob.type});
