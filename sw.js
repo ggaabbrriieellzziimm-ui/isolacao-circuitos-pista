@@ -1,6 +1,6 @@
 // Service Worker — RGL Balizamento (Isolação)
 // Faz o app funcionar offline após o primeiro carregamento.
-const CACHE_VERSION = 'rgl-isolacao-v19';
+const CACHE_VERSION = 'rgl-isolacao-v20';
 const APP_SHELL = [
   './',
   './index.html',

@@ -169,6 +169,7 @@ button.primary:active{background:#e0a01c;}
 button.secondary{width:100%;padding:13px;background:transparent;color:var(--text);border:1px solid var(--border);
   border-radius:10px;font-family:var(--disp);font-size:14px;letter-spacing:.03em;text-transform:uppercase;
   cursor:pointer;margin-top:8px;}
+button.secondary.danger{color:#ff8a82;border-color:#e5484d;}
 
 /* history */
 .hist-section{margin-top:22px;}
@@ -1425,6 +1426,8 @@ function renderCorretivaDetail(){
       <div class="hint">Exporta os registros salvos deste circuito sob a OS corretiva informada acima.</div>
       <button class="secondary" id="corrExportDocxBtn" style="margin-top:10px;">📄 Exportar relatório (.docx)</button>
       <div class="hint">Gera um relatório técnico em Word com os dados dessa corretiva.</div>
+      <button class="secondary danger" id="corrResetCircuitBtn" style="margin-top:10px;">🗑 Apagar todos os registros deste circuito</button>
+      <div class="hint">Remove TODAS as medições (preventiva e corretiva) e números de OS lançados neste circuito, em qualquer OS. Não tem como desfazer.</div>
     </div>
   `;
 
@@ -1433,6 +1436,7 @@ function renderCorretivaDetail(){
   corrOsInput.oninput = (e)=>{ e.target.value = e.target.value.replace(/\D/g,''); currentCorrOS = e.target.value; };
   document.getElementById('corrExportBtn').onclick = ()=>{ activeExportOS = currentCorrOS; exportCircuit(); };
   document.getElementById('corrExportDocxBtn').onclick = ()=>{ activeExportOS = currentCorrOS; exportDocxCircuit(); };
+  document.getElementById('corrResetCircuitBtn').onclick = ()=>resetCircuitData(circ, ()=>{ showList(); renderList(); });
   detail.querySelectorAll('.os-suggest-chip').forEach(chip=>{
     chip.onclick = ()=>{ corrOsInput.value = chip.dataset.os; currentCorrOS = chip.dataset.os; };
   });
@@ -2128,6 +2132,29 @@ function suggestNextRange(circ){
   return null; // sequência completa
 }
 
+// Apaga TODOS os registros (preventiva + corretiva, todas as OS) de um
+// único circuito — não mexe em nenhum outro circuito. Dupla confirmação
+// porque não tem como desfazer.
+function resetCircuitData(circ, onDone){
+  const recs = loadRecords();
+  const doCircuito = recs.filter(r=>r.circId===circ.id);
+  if(doCircuito.length===0){ showToast('Esse circuito já não tem nenhum registro salvo.'); return; }
+  const ok1 = confirm(`Apagar TODOS os ${doCircuito.length} registro(s) (preventiva e corretiva, todas as OS) do circuito "${circLabel(circ)}"? Isso não pode ser desfeito.`);
+  if(!ok1) return;
+  const ok2 = confirm('Tem certeza mesmo? Essa é a última confirmação — os valores medidos e os números de OS lançados serão apagados.');
+  if(!ok2) return;
+  const restantes = recs.filter(r=>r.circId!==circ.id);
+  saveRecords(restantes);
+  const osMap = loadOsMap();
+  delete osMap[circ.id];
+  localStorage.setItem(OS_MAP_KEY, JSON.stringify(osMap));
+  currentOS = '';
+  currentCorrOS = '';
+  showToast('Registros apagados. Pode lançar de novo.');
+  renderList();
+  if(onDone) onDone(); else renderDetail();
+}
+
 function renderDetail(){
   const circ = currentCircuit;
   const detail = document.getElementById('detail');
@@ -2244,6 +2271,8 @@ function renderDetail(){
       <div class="hint">Exporta todos os registros salvos deste circuito no mesmo layout de colunas da planilha original. Quando há preventiva e corretiva no mesmo trecho, vale sempre a última modificação.</div>
       <button class="secondary" id="exportDocxBtn" style="margin-top:10px;">📄 Exportar relatório (.docx)</button>
       <div class="hint">Gera um relatório técnico em Word — dados do circuito, tabela de medições, fotos anexadas com localização e espaço pra conclusão/assinatura. Você pode editar depois de baixar.</div>
+      <button class="secondary danger" id="resetCircuitBtn" style="margin-top:10px;">🗑 Apagar todos os registros deste circuito</button>
+      <div class="hint">Remove TODAS as medições (preventiva e corretiva) e números de OS lançados neste circuito, em qualquer OS — não afeta os outros circuitos. Não tem como desfazer.</div>
     </div>
 
     ${circuitSupportsFreeSearch(circ) ? `
@@ -2312,6 +2341,7 @@ function renderDetail(){
   updateGeoStatus();
   document.getElementById('exportBtn').onclick = ()=>{ activeExportOS = currentOS; exportCircuit(); };
   document.getElementById('exportDocxBtn').onclick = ()=>{ activeExportOS = currentOS; exportDocxCircuit(); };
+  document.getElementById('resetCircuitBtn').onclick = ()=>resetCircuitData(circ);
 
   if(circuitSupportsFreeSearch(circ)){
     const fsDe = document.getElementById('fsDe');
