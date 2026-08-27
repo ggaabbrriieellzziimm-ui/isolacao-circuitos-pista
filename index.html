@@ -1093,8 +1093,16 @@ function renderPainelGeral(){
     porPista[pista] = falhasNaPista;
   });
 
-  // Falhas primeiro (mais crítico no topo), depois os normais, em ordem alfabética.
-  todosCircuitos.sort((a,b)=> b.n - a.n || circLabel(a.circ).localeCompare(circLabel(b.circ)));
+  // Ordena pela sequência física da pista (mesmo critério da lista
+  // principal — começa pelo lado citado primeiro no nome, ex: 11R antes
+  // de 29L em "11R/29L"), com os divisores amarelos marcando a transição.
+  const [sideA, sideB] = currentPista.split('/');
+  const groupA = [], groupB = [];
+  todosCircuitos.forEach(x=>{
+    const side = sideLabelFor(x.circ.nome, sideA, sideB);
+    if(side===sideB) groupB.push(x); else groupA.push(x);
+  });
+  const todosOrdenados = groupA.concat(groupB);
 
   const cardsPista = pistas.map(p=>{
     const n = porPista[p];
@@ -1105,9 +1113,17 @@ function renderPainelGeral(){
     </div>`;
   }).join('');
 
-  const listaFonte = pgMode==='corr' ? todosCircuitos.filter(x=>x.n>0) : todosCircuitos;
+  const listaFonte = pgMode==='corr' ? todosOrdenados.filter(x=>x.n>0) : todosOrdenados;
 
+  let lastSide = null;
   const listaHtml = listaFonte.length ? listaFonte.map(x=>{
+    const detected = sideLabelFor(x.circ.nome, sideA, sideB);
+    const effectiveSide = detected || lastSide || sideA;
+    let dividerHtml = '';
+    if(effectiveSide !== lastSide){
+      dividerHtml = `<div class="side-divider">Início ${effectiveSide}</div>`;
+      lastSide = effectiveSide;
+    }
     const osAtual = loadOsMap()[x.circ.id] || null;
     const osCorr = x.n>0 ? [...new Set(latestFalhaRecords(x.circ).map(r=>{
       const corr = loadRecords().filter(c=>c.circId===x.circ.id && c.manut==='corr' && c.deIdx===r.deIdx && c.ateIdx===r.ateIdx).sort((a,b)=>b.ts-a.ts)[0];
@@ -1116,7 +1132,7 @@ function renderPainelGeral(){
     const osTxt = x.n>0
       ? (osCorr.length ? `OS corretiva: ${osCorr.join(', ')}` : 'sem OS corretiva aberta')
       : (osAtual ? `Última OS: ${osAtual}` : 'sem OS registrada');
-    return `
+    return `${dividerHtml}
     <div class="pg-item readonly ${x.semDados?'dim':''}">
       <div>
         <div class="l">${circLabel(x.circ)}</div>
@@ -1199,8 +1215,20 @@ function sideLabelFor(nome, sideA, sideB){
   if(new RegExp('\\b'+sideA+'$').test(upper)) return sideA;
   return null;
 }
+// Reordena a lista pra sempre começar pelo lado citado PRIMEIRO no nome da
+// pista (ex: em "11R/29L", os itens do 11R vêm antes dos do 29L),
+// preservando a ordem original dentro de cada grupo.
+function reorderBySide(circuits, sideA, sideB){
+  const groupA = [], groupB = [];
+  circuits.forEach(c=>{
+    const side = sideLabelFor(c.nome, sideA, sideB);
+    if(side===sideB) groupB.push(c); else groupA.push(c); // sem sufixo -> lado A (base)
+  });
+  return groupA.concat(groupB);
+}
 function appendWithSideDividers(clist, circuits, buildCardFn){
   const [sideA, sideB] = currentPista.split('/');
+  circuits = reorderBySide(circuits, sideA, sideB);
   let lastSide = null;
   circuits.forEach(c=>{
     const detected = sideLabelFor(c.nome, sideA, sideB);
