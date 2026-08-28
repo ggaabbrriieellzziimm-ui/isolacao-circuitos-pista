@@ -840,12 +840,34 @@ function initFirebaseSync(){
     updateSyncBadge();
     const safeCode = code.trim().toLowerCase().replace(/[^a-z0-9\-_]/g,'');
     fbRecordsRef = firebase.database().ref('isolacao/'+safeCode+'/records');
+    let primeiraSincronizacao = true;
     fbRecordsRef.on('value', snap=>{
       syncStatus = 'on';
       updateSyncBadge();
       const val = snap.val() || {};
-      const recs = Object.values(val);
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(recs));
+      const cloudRecs = Object.values(val);
+
+      if(primeiraSincronizacao){
+        primeiraSincronizacao = false;
+        // Na primeira conexão, NUNCA descarta o que já existia neste
+        // celular — mescla com o que já está na nuvem. Se algum registro
+        // só existe localmente, ele sobe pra nuvem também, em vez de ser
+        // apagado.
+        const localRecs = loadRecords();
+        const byId = {};
+        cloudRecs.forEach(r=>{ if(r && r.id) byId[r.id]=r; });
+        let enviados = 0;
+        localRecs.forEach(r=>{
+          if(!r || !r.id) return;
+          if(!byId[r.id]){ byId[r.id]=r; pushRecordToCloud(r); enviados++; }
+        });
+        const merged = Object.values(byId);
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(merged));
+        if(enviados>0) showToast(`Sincronização ativada — ${enviados} registro(s) deste celular enviados pra nuvem.`);
+      } else {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(cloudRecs));
+      }
+
       // atualiza a tela que estiver visível, sem perder o que o técnico
       // estiver digitando em campos de texto (medida/OS) no momento.
       const detailShowing = document.getElementById('detail').classList.contains('show');
