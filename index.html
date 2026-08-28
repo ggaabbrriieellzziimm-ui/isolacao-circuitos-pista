@@ -325,6 +325,13 @@ button.secondary.danger{color:#ff8a82;border-color:#e5484d;}
 .profile-legend .legend-item{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--text);}
 .profile-legend .legend-line{width:20px;height:0;border-top-width:3px;border-top-style:solid;flex-shrink:0;}
 .profile-legend .legend-line.dashed{border-top-style:dashed;}
+.profile-warning{margin-top:12px;padding:10px 12px;background:var(--panel);border:1px dashed var(--amber);border-radius:10px;}
+.profile-warning-title{font-family:var(--disp);font-size:12px;color:var(--amber);margin-bottom:8px;}
+.profile-warning-item{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:6px 0;
+  border-top:1px solid var(--border);font-size:12.5px;}
+.profile-warning-item:first-of-type{border-top:none;}
+.profile-warning-btn{padding:5px 10px;border-radius:7px;border:1px solid var(--amber);background:transparent;
+  color:var(--amber);font-family:var(--disp);font-size:11px;cursor:pointer;white-space:nowrap;}
 .trend-row{display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--border);
   font-family:var(--mono);font-size:12px;}
 .trend-row:last-child{border-bottom:none;}
@@ -1199,6 +1206,38 @@ function latestFalhaRecords(circ){
   return Object.values(latestByRangeMap(circ)).filter(r=>r.situacao==='FALHA');
 }
 
+// Corretivas já feitas (independente de terem corrigido o trecho ou não)
+// que ainda não têm número de OS lançado — usado pra mostrar o aviso e
+// deixar o técnico completar depois.
+function latestUntaggedCorretivas(circ){
+  const recs = loadRecords().filter(r=>r.circId===circ.id && r.manut==='corr');
+  const byKey = {};
+  recs.forEach(r=>{
+    const key = groupKeyFor(circ, r);
+    if(!byKey[key] || r.ts>byKey[key].ts) byKey[key]=r;
+  });
+  return Object.values(byKey).filter(r=>!r.os);
+}
+
+// Deixa o técnico completar depois o número de uma OS corretiva que foi
+// salva sem esse dado — atualiza só aquele registro específico, sem
+// precisar reabrir a tela de corretiva.
+function promptAddOsToRecord(record, afterFn){
+  const novo = prompt(`Número da OS corretiva para o trecho ${record.de} → ${record.ate}:`, '');
+  if(novo===null) return;
+  const limpo = novo.trim();
+  if(!/^\d+$/.test(limpo)){ showToast('Digite só números.'); return; }
+  const recs = loadRecords();
+  const idx = recs.findIndex(r=>r.id===record.id);
+  if(idx===-1){ showToast('Registro não encontrado.'); return; }
+  recs[idx] = {...recs[idx], os: limpo};
+  saveRecords(recs);
+  pushRecordToCloud(recs[idx]);
+  saveLastOsForCircuit(record.circId, limpo);
+  showToast('OS corretiva adicionada.');
+  if(afterFn) afterFn();
+}
+
 // Conta quantos trechos (últimos registros, sem contar duplicata) estão em
 // FALHA agora mesmo para um circuito — usado no Painel Geral e na Corretiva.
 function countFalhas(circ){
@@ -1244,7 +1283,7 @@ function renderPainelGeral(){
     </div>`;
   }).join('');
 
-  const listaFonte = pgMode==='corr' ? todosOrdenados.filter(x=>x.n>0) : todosOrdenados;
+  const listaFonte = pgMode==='corr' ? todosOrdenados.filter(x=>x.n>0 || latestUntaggedCorretivas(x.circ).length>0) : todosOrdenados;
 
   let lastSide = null;
   const listaHtml = listaFonte.length ? listaFonte.map(x=>{
@@ -1256,18 +1295,21 @@ function renderPainelGeral(){
       lastSide = effectiveSide;
     }
     const osAtual = loadOsMap()[x.circ.id] || null;
+    const untagged = latestUntaggedCorretivas(x.circ);
     const osCorr = x.n>0 ? [...new Set(latestFalhaRecords(x.circ).map(r=>{
       const corr = loadRecords().filter(c=>c.circId===x.circ.id && c.manut==='corr' && c.deIdx===r.deIdx && c.ateIdx===r.ateIdx).sort((a,b)=>b.ts-a.ts)[0];
       return corr ? corr.os : null;
     }).filter(Boolean))] : [];
-    const osTxt = x.n>0
-      ? (osCorr.length ? `OS corretiva: ${osCorr.join(', ')}` : 'sem OS corretiva aberta')
-      : (osAtual ? `Última OS: ${osAtual}` : 'sem OS registrada');
+    const osTxt = untagged.length
+      ? `⚠ ${untagged.length} corretiva(s) sem OS lançada`
+      : (x.n>0
+        ? (osCorr.length ? `OS corretiva: ${osCorr.join(', ')}` : 'sem OS corretiva aberta')
+        : (osAtual ? `Última OS: ${osAtual}` : 'sem OS registrada'));
     return `${dividerHtml}
     <div class="pg-item readonly ${x.semDados?'dim':''}">
       <div>
         <div class="l">${circLabel(x.circ)}</div>
-        <div class="m">${x.pista}${x.semDados ? ' · sem dados' : ` · ${osTxt}`}</div>
+        <div class="m"${untagged.length?' style="color:var(--amber);"':''}>${x.pista}${x.semDados ? ' · sem dados' : ` · ${osTxt}`}</div>
       </div>
       <div style="display:flex;align-items:center;gap:10px;">
         ${x.n>0 ? `<div style="text-align:right;"><div class="count">${x.n}</div><div class="m" style="margin-top:0;">trecho${x.n===1?'':'s'}</div></div>` : `<div class="pg-ok-tag">${x.semDados?'—':'OK'}</div>`}
@@ -1544,7 +1586,7 @@ function renderCorretivaDetail(){
     </div>
 
     <div class="os-panel corr">
-      <label>Nº da OS corretiva (obrigatório para salvar)</label>
+      <label>Nº da OS corretiva (opcional — pode lançar depois)</label>
       <input type="text" inputmode="numeric" pattern="[0-9]*" id="corrOsInput" placeholder="ex: 2001" value="${currentCorrOS}">
       ${recentOsListCorr.length ? `<div class="os-suggest">${recentOsListCorr.map(os=>`<button type="button" class="os-suggest-chip corr" data-os="${os}">${os}</button>`).join('')}</div>` : ''}
       <div class="os-hint">Vinculada à(s) OS preventiva(s) que identificaram estes trechos.</div>
@@ -1575,8 +1617,11 @@ function renderCorretivaDetail(){
 
   detail.querySelectorAll('.corr-save-btn').forEach(btn=>{
     btn.onclick = ()=>{
-      if(!currentCorrOS || !/^\d+$/.test(currentCorrOS)){
-        showToast('Digite o número da OS corretiva antes de salvar.');
+      // OS corretiva NÃO é obrigatória pra salvar — o técnico às vezes só
+      // recebe o número dela depois de já ter corrigido em campo. Se
+      // salvar sem OS, um aviso aparece depois pra lembrar de completar.
+      if(currentCorrOS && !/^\d+$/.test(currentCorrOS)){
+        showToast('O número da OS deve ter só dígitos.');
         document.getElementById('corrOsInput').focus();
         return;
       }
@@ -1596,7 +1641,7 @@ function renderCorretivaDetail(){
         de: circ.pontos[calc.i].label, ate: circ.pontos[calc.j].label, deIdx: calc.i, ateIdx: calc.j,
         comprimento: calc.comprimento, trafos: calc.trafos, total_uA: calc.total_uA, calculada: calc.calculada,
         medida: medida, situacao: situacao,
-        manut: 'corr', os: currentCorrOS, sourceOs: sourceOs,
+        manut: 'corr', os: currentCorrOS || '', sourceOs: sourceOs,
         ts: Date.now(),
         foto: pendingFoto ? {dataUrl: pendingFoto.dataUrl, width: pendingFoto.width, height: pendingFoto.height} : null,
         lat: pendingGeo ? pendingGeo.lat : null,
@@ -1605,8 +1650,12 @@ function renderCorretivaDetail(){
       recs.push(novoRegistro);
       saveRecords(recs);
       pushRecordToCloud(novoRegistro);
-      saveLastOsForCircuit(circ.id, currentCorrOS);
-      showToast(situacao==='NORMAL' ? 'Salvo — trecho corrigido, agora NORMAL.' : 'Salvo — ainda em FALHA.');
+      if(currentCorrOS) saveLastOsForCircuit(circ.id, currentCorrOS);
+      showToast(
+        !currentCorrOS
+          ? (situacao==='NORMAL' ? 'Salvo sem OS — lembre de lançar o número depois.' : 'Salvo sem OS — ainda em FALHA.')
+          : (situacao==='NORMAL' ? 'Salvo — trecho corrigido, agora NORMAL.' : 'Salvo — ainda em FALHA.')
+      );
       renderCorretivaDetail();
     };
   });
@@ -2956,9 +3005,18 @@ function openCircuitProfileModal(circ){
     legendLabel: `Corretiva ${new Date(g.ts).getFullYear()} — OS ${g.os}`
   }));
 
+  const untaggedCorrRecs = allRecs.filter(r=>r.manut==='corr' && !r.os);
+  const untaggedByKey = {};
+  untaggedCorrRecs.forEach(r=>{
+    const key = groupKeyFor(circ, r);
+    if(!untaggedByKey[key] || r.ts>untaggedByKey[key].ts) untaggedByKey[key]=r;
+  });
+  const untaggedList = Object.values(untaggedByKey);
+
   // monta a linha mesclada: corretiva tem prioridade onde existir (a mais
   // recente, se mais de uma corretiva tiver mexido no mesmo trecho),
-  // senão usa a base da preventiva.
+  // senão usa a base da preventiva. Corretivas sem OS ainda entram na
+  // linha (pra refletir o estado real), só que com cor de aviso.
   const mergedValuesByI = new Map();
   const mergedPointColor = new Map();
   for(let i=0;i<=segs.length;i++){
@@ -2967,6 +3025,10 @@ function openCircuitProfileModal(circ){
       const v = g.valuesByI.get(i);
       if(v && (!melhorOverride || v.ts>melhorOverride.ts)){ melhorOverride = {...v, cor: CORR_COLORS[idx % CORR_COLORS.length]}; }
     });
+    const untagged = i>0 ? untaggedByKey[(i-1)+'|'+i] : null;
+    if(untagged && (!melhorOverride || untagged.ts>melhorOverride.ts)){
+      melhorOverride = {...untagged, cor: 'var(--amber)'};
+    }
     if(melhorOverride){
       mergedValuesByI.set(i, melhorOverride);
       mergedPointColor.set(i, melhorOverride.cor);
@@ -2985,6 +3047,17 @@ function openCircuitProfileModal(circ){
     <div class="legend-item"><span class="legend-line" style="border-color:${s.color};"></span><span>${s.legendLabel}</span></div>
   `).join('') + `<div class="legend-item"><span class="legend-line dashed" style="border-color:var(--amber);"></span><span>Mínimo admissível (varia por trecho)</span></div>`;
 
+  const avisoSemOsHtml = untaggedList.length ? `
+    <div class="profile-warning">
+      <div class="profile-warning-title">⚠ ${untaggedList.length} corretiva(s) sem número de OS</div>
+      ${untaggedList.map(r=>`
+        <div class="profile-warning-item" data-recid="${r.id}">
+          <span>${r.de} → ${r.ate}</span>
+          <button class="profile-warning-btn" data-recid="${r.id}">+ adicionar OS</button>
+        </div>
+      `).join('')}
+    </div>` : '';
+
   document.getElementById('trendPanel').innerHTML = `
     <div class="trend-header">
       <div class="trend-title">${circLabel(circ)}</div>
@@ -2998,12 +3071,13 @@ function openCircuitProfileModal(circ){
       <div class="profile-legend">${legendHtml(prevSeries)}</div>
     </div>
 
-    ${corrSeries.length>0 ? `
+    ${(corrSeries.length>0 || untaggedList.length>0) ? `
     <div class="profile-card corr">
       <span class="profile-tag corr">✅ Gráfico Após Corretiva</span>
       <div class="profile-scrollwrap"><canvas id="profileChartCorr"></canvas></div>
       <div class="profile-scroll-hint">↔ arraste pro lado</div>
       <div class="profile-legend">${legendHtml([baseSeries, ...corrSeries])}</div>
+      ${avisoSemOsHtml}
     </div>` : `<div class="pg-empty" style="margin-top:14px;">Sem corretivas registradas ainda neste circuito.</div>`}
   `;
 
@@ -3013,11 +3087,20 @@ function openCircuitProfileModal(circ){
     document.getElementById('trendTooltip').style.display = 'none';
   };
 
+  document.querySelectorAll('.profile-warning-btn').forEach(btn=>{
+    btn.onclick = ()=>{
+      const recs = loadRecords();
+      const record = recs.find(r=>r.id===btn.dataset.recid);
+      if(!record) return;
+      promptAddOsToRecord(record, ()=>openCircuitProfileModal(circ));
+    };
+  });
+
   const canvasPrev = document.getElementById('profileChartPrev');
   const xForPrev = drawProfileChart(canvasPrev, circ, segs, prevSeries);
   wireProfileTooltip(canvasPrev, xForPrev, circ, segs, prevSeries);
 
-  if(corrSeries.length>0){
+  if(corrSeries.length>0 || untaggedList.length>0){
     const canvasCorr = document.getElementById('profileChartCorr');
     const xForCorr = drawProfileChart(canvasCorr, circ, segs, [mergedSeries]);
     wireProfileTooltip(canvasCorr, xForCorr, circ, segs, [baseSeries, ...corrSeries]);
@@ -3056,7 +3139,13 @@ function renderHistory(){
     if(r.situacao!=='NORMAL'){
       const allRecs = loadRecords().filter(x=>x.circId===currentCircuit.id && x.manut==='corr' && x.deIdx===deIdx && x.ateIdx===ateIdx);
       const lastCorr = allRecs.sort((a,b)=>b.ts-a.ts)[0];
-      corrTag = `<div class="meta" style="color:#ff8a82;">${lastCorr ? `Corretiva OS: ${lastCorr.os}` : 'Corretiva ainda não aberta'}</div>`;
+      if(lastCorr && lastCorr.os){
+        corrTag = `<div class="meta" style="color:#ff8a82;">Corretiva OS: ${lastCorr.os}</div>`;
+      } else if(lastCorr && !lastCorr.os){
+        corrTag = `<div class="meta corr-no-os" style="color:var(--amber);" data-recid="${lastCorr.id}">⚠ Corretiva feita, sem OS lançado — toque pra adicionar</div>`;
+      } else {
+        corrTag = `<div class="meta" style="color:#ff8a82;">Corretiva ainda não aberta</div>`;
+      }
     }
     return `<div class="hist-item" data-deidx="${deIdx}" data-ateidx="${ateIdx}">
       <div class="l">
@@ -3080,6 +3169,7 @@ function renderHistory(){
   histList.querySelectorAll('.hist-item').forEach(item=>{
     item.onclick = (e)=>{
       if(e.target.closest('.hist-del')) return;
+      if(e.target.closest('.corr-no-os')) return;
       openTrendPanel(currentCircuit, parseInt(item.dataset.deidx,10), parseInt(item.dataset.ateidx,10));
     };
   });
@@ -3091,6 +3181,15 @@ function renderHistory(){
       saveRecords(recs);
       pushDeleteToCloud(btn.dataset.id);
       renderHistory(); renderList();
+    };
+  });
+  histList.querySelectorAll('.corr-no-os').forEach(el=>{
+    el.onclick = (e)=>{
+      e.stopPropagation();
+      const recs = loadRecords();
+      const record = recs.find(r=>r.id===el.dataset.recid);
+      if(!record) return;
+      promptAddOsToRecord(record, ()=>{ renderHistory(); renderList(); });
     };
   });
 }
